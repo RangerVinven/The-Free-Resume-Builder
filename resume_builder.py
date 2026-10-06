@@ -240,8 +240,9 @@ def manage_sections(data):
                         company = questionary.text("Company/School [Optional]:").ask()
                         location = questionary.text("Location [Optional]:").ask()
                         date = questionary.text("Date (e.g. May 2024 - August 2024) [Optional]:").ask()
-                        subtitle = questionary.text("Item Subtitle (e.g. Degree or GPA) [Optional]:").ask()
-                        item = {"role": role, "company": company, "location": location, "date": date, "subtitle": subtitle, "details": []}
+                        subtitle = questionary.text("Item Subtitle Left (e.g. Degree) [Optional]:").ask()
+                        subtitle_right = questionary.text("Item Subtitle Right (e.g. GPA) [Optional]:").ask()
+                        item = {"role": role, "company": company, "location": location, "date": date, "subtitle": subtitle, "subtitle_right": subtitle_right, "details": []}
                         while True:
                             if not questionary.confirm("Add a detail (bullet point or prose)?").ask():
                                 break
@@ -287,7 +288,8 @@ def manage_sections(data):
                                 item['company'] = questionary.text("Company/School:", default=item.get('company', '')).ask()
                                 item['location'] = questionary.text("Location:", default=item.get('location', '')).ask()
                                 item['date'] = questionary.text("Date:", default=item.get('date', '')).ask()
-                                item['subtitle'] = questionary.text("Item Subtitle:", default=item.get('subtitle', '')).ask()
+                                item['subtitle'] = questionary.text("Item Subtitle Left:", default=item.get('subtitle', '')).ask()
+                                item['subtitle_right'] = questionary.text("Item Subtitle Right:", default=item.get('subtitle_right', '')).ask()
                             elif action == "Delete Item":
                                 if confirm_deletion("item"):
                                     section['items'].pop(item_idx)
@@ -346,8 +348,13 @@ def preview_resume_terminal(data):
                 if item.get('date'):
                     header += f"  [yellow]({item.get('date')})[/yellow]"
                 console.print(header)
-                if item.get('subtitle'):
-                    console.print(f"[italic]{item.get('subtitle')}[/italic]")
+                if item.get('subtitle') or item.get('subtitle_right'):
+                    sub_left = item.get('subtitle', '')
+                    sub_right = item.get('subtitle_right', '')
+                    if sub_left and sub_right:
+                        console.print(f"[italic]{sub_left} | {sub_right}[/italic]")
+                    else:
+                        console.print(f"[italic]{sub_left}{sub_right}[/italic]")
                 for detail in item.get('details', []):
                     if detail.get('is_bullet'):
                         console.print(f"  • {detail.get('text', '')}")
