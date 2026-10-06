@@ -42,6 +42,20 @@ def confirm_deletion(item_name):
             return True
     return False
 
+
+def show_help():
+    console.print("\n[bold cyan]--- Formatting Example ---[/bold cyan]")
+    console.print("When you create an item in a section, this is how it will look on the final generated document:")
+    console.print("")
+    console.print("[bold green][Role/Title][/bold green][green], [Company/School][/green][bold green] – [Location][/bold green]                  [yellow]([Date])[/yellow]")
+    console.print("[italic][Item Subtitle (e.g. Degree, GPA, etc.)][/italic]")
+    console.print("  • [Detail style: Bullet Point]")
+    console.print("  [Detail style: Prose]")
+    console.print("")
+    console.print("Note: If you leave any of the optional fields blank, they will automatically format cleanly to fit the remaining information!")
+    console.print("")
+    questionary.press_any_key_to_continue().ask()
+
 def options_menu():
     settings = load_settings()
     while True:
@@ -284,7 +298,7 @@ def main():
     init_app()
     console.print('[bold magenta]Welcome to The Free Resume Builder![/bold magenta]')
     while True:
-        choice = questionary.select('Main Menu:', choices=['Select/Edit Resume', 'Create New Resume', 'Delete a Resume', 'Options', 'Exit'], use_shortcuts=True).ask()
+        choice = questionary.select('Main Menu:', choices=['Select/Edit Resume', 'Create New Resume', 'Delete a Resume', 'Options', 'Help / Examples', 'Exit'], use_shortcuts=True).ask()
         if choice == 'Select/Edit Resume':
             filepath = select_resume()
             if filepath:
@@ -297,6 +311,8 @@ def main():
             delete_resume()
         elif choice == 'Options':
             options_menu()
+        elif choice == 'Help / Examples':
+            show_help()
         else:
             console.print('[bold blue]Goodbye![/bold blue]')
             break
