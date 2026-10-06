@@ -135,9 +135,10 @@ def manage_sections(data):
         if choice == 'Back' or not choice:
             break
         elif choice == 'Add New Section':
-            title = questionary.text('Section Title (e.g. EDUCATION, EXPERIENCE):').ask()
+            title = questionary.text('Section Title (e.g. EDUCATION, EXPERIENCE, SKILLS):').ask()
             if title:
-                data.setdefault('sections', []).append({'title': title.upper(), 'items': []})
+                is_skills = questionary.confirm("Is this a Skills section (Key-Value format)?").ask()
+                data.setdefault('sections', []).append({'title': title.upper(), 'is_skills': is_skills, 'items': []})
                 console.print(f"[green]Added section: {title.upper()}[/green]")
         else:
             idx = choices.index(choice)
@@ -247,26 +248,31 @@ def preview_resume_terminal(data):
     for section in data.get('sections', []):
         console.print(f"[bold magenta]{section.get('title', '')}[/bold magenta]")
         console.print('[magenta]' + '-' * 40 + '[/magenta]')
-        for item in section.get('items', []):
-            header_parts = []
-            if item.get('role'):
-                header_parts.append(f"[bold green]{item.get('role')}[/bold green]")
-            if item.get('company'):
-                header_parts.append(f"[green]{(', ' if item.get('role') else '')}{item.get('company')}[/green]")
-            if item.get('location'):
-                header_parts.append(f"[bold green] – {item.get('location')}[/bold green]")
-            header = ''.join(header_parts)
-            if item.get('date'):
-                header += f"  [yellow]({item.get('date')})[/yellow]"
-            console.print(header)
-            if item.get('subtitle'):
-                console.print(f"[italic]{item.get('subtitle')}[/italic]")
-            for detail in item.get('details', []):
-                if detail.get('is_bullet'):
-                    console.print(f"  • {detail.get('text', '')}")
-                else:
-                    console.print(f"  {detail.get('text', '')}")
+        if section.get('is_skills'):
+            for skill in section.get('items', []):
+                console.print(f"[bold green]{skill.get('category')}:[/bold green] {skill.get('text')}")
             console.print('')
+        else:
+            for item in section.get('items', []):
+                header_parts = []
+                if item.get('role'):
+                    header_parts.append(f"[bold green]{item.get('role')}[/bold green]")
+                if item.get('company'):
+                    header_parts.append(f"[green]{(', ' if item.get('role') else '')}{item.get('company')}[/green]")
+                if item.get('location'):
+                    header_parts.append(f"[bold green] – {item.get('location')}[/bold green]")
+                header = ''.join(header_parts)
+                if item.get('date'):
+                    header += f"  [yellow]({item.get('date')})[/yellow]"
+                console.print(header)
+                if item.get('subtitle'):
+                    console.print(f"[italic]{item.get('subtitle')}[/italic]")
+                for detail in item.get('details', []):
+                    if detail.get('is_bullet'):
+                        console.print(f"  • {detail.get('text', '')}")
+                    else:
+                        console.print(f"  {detail.get('text', '')}")
+                console.print('')
     questionary.press_any_key_to_continue().ask()
 
 def generate_resume(data, filepath):
