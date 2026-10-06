@@ -1,4 +1,7 @@
 import json
+import copy
+from datetime import datetime
+
 import os
 import sys
 from pathlib import Path
@@ -32,6 +35,21 @@ def load_resume(filepath):
         return json.load(f)
 
 def save_resume(filepath, data):
+    if filepath.exists():
+        with open(filepath, 'r') as f:
+            try:
+                old_data = json.load(f)
+            except json.JSONDecodeError:
+                old_data = {}
+        old_compare = {k: v for k, v in old_data.items() if k != '_history'}
+        new_compare = {k: v for k, v in data.items() if k != '_history'}
+        if old_compare != new_compare and old_compare:
+            history = data.get('_history', [])
+            history.append({
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'state': old_compare
+            })
+            data['_history'] = history
     with open(filepath, 'w') as f:
         json.dump(data, f, indent=4)
 
@@ -345,12 +363,51 @@ def generate_resume(data, filepath):
     doc.save(out_name)
     console.print(f'[green]Successfully generated {out_name}![/green]')
 
+def version_history_menu(data, filepath):
+    history = data.get('_history', [])
+    if not history:
+        console.print("[yellow]No version history available for this resume yet. It saves automatically as you make changes.[/yellow]")
+        questionary.press_any_key_to_continue().ask()
+        return data
+
+    while True:
+        # Show most recent first
+        choices = [f"{i+1}. {h['timestamp']}" for i, h in enumerate(reversed(history))] + ['Back']
+        choice = questionary.select("Select a past version:", choices=choices, use_shortcuts=True).ask()
+        
+        if choice == 'Back' or not choice:
+            break
+            
+        # Convert choice back to original history index
+        rev_idx = int(choice.split('.')[0]) - 1
+        idx = len(history) - 1 - rev_idx
+        selected_version = history[idx]
+        
+        action = questionary.select(
+            "What would you like to do with this version?", 
+            choices=["Generate PDF/Docx to preview", "Revert to this version", "Back"], 
+            use_shortcuts=True
+        ).ask()
+        
+        if action == "Generate PDF/Docx to preview":
+            temp_data = selected_version['state']
+            temp_filepath = filepath.with_name(f"{filepath.stem}_history_{idx+1}.json")
+            generate_resume(temp_data, temp_filepath)
+        elif action == "Revert to this version":
+            if questionary.confirm("Are you sure? Your current state will be saved as a new history entry.").ask():
+                new_data = selected_version['state']
+                new_data['_history'] = history # Preserve the history list
+                console.print("[green]Reverted to past version![/green]")
+                return new_data
+
+    return data
+
 def edit_resume_menu(filepath):
     data = load_resume(filepath)
     while True:
         save_resume(filepath, data)
         console.print(f'\n[bold cyan]--- Editing {filepath.name} ---[/bold cyan]')
-        choice = questionary.select('What would you like to do?', choices=['Edit Contact Info', 'Manage Sections & Items', 'Preview in Terminal', 'Generate/Preview Resume', 'Save & Return to Main Menu'], use_shortcuts=True).ask()
+        choice = questionary.select('What would you like to do?', choices=['Edit Contact Info', 'Manage Sections & Items', 'Preview in Terminal', 'Generate/Preview Resume', 'Version History', 'Save & Return to Main Menu'], use_shortcuts=True).ask()
         if choice == 'Edit Contact Info':
             data = edit_contact_info(data)
         elif choice == 'Manage Sections & Items':
@@ -359,6 +416,8 @@ def edit_resume_menu(filepath):
             preview_resume_terminal(data)
         elif choice == 'Generate/Preview Resume':
             generate_resume(data, filepath)
+        elif choice == 'Version History':
+            data = version_history_menu(data, filepath)
         else:
             save_resume(filepath, data)
             break
