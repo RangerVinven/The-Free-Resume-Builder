@@ -39,7 +39,7 @@ def save_resume(filepath, data):
 def options_menu():
     settings = load_settings()
     while True:
-        choice = questionary.select(
+        choice = questionary.rawselect(
             "Options:",
             choices=[
                 "Set API Keys",
@@ -48,7 +48,7 @@ def options_menu():
         ).ask()
         
         if choice == "Set API Keys":
-            provider = questionary.select(
+            provider = questionary.rawselect(
                 "Select Provider:",
                 choices=["OpenAI", "Gemini", "Claude", "Other", "Back"]
             ).ask()
@@ -92,7 +92,7 @@ def select_resume():
         return create_resume()
     
     choices = [r.name for r in resumes] + ["Create New Resume", "Back"]
-    choice = questionary.select("Select a resume:", choices=choices).ask()
+    choice = questionary.rawselect("Select a resume:", choices=choices).ask()
     
     if choice == "Create New Resume":
         return create_resume()
@@ -112,7 +112,7 @@ def edit_contact_info(data):
 def edit_sections(data):
     while True:
         choices = [f"Edit: {s['title']}" for s in data.get('sections', [])] + ["Add New Section", "Back"]
-        choice = questionary.select("Manage Sections:", choices=choices).ask()
+        choice = questionary.rawselect("Manage Sections:", choices=choices).ask()
         
         if choice == "Back" or not choice:
             break
@@ -124,7 +124,7 @@ def edit_sections(data):
         else:
             idx = choices.index(choice)
             section = data['sections'][idx]
-            action = questionary.select("Action:", choices=["Rename Section", "Delete Section", "Back"]).ask()
+            action = questionary.rawselect("Action:", choices=["Rename Section", "Delete Section", "Back"]).ask()
             
             if action == "Rename Section":
                 new_title = questionary.text("New Title:", default=section['title']).ask()
@@ -143,26 +143,28 @@ def manage_items(data):
         return data
         
     section_choices = [s['title'] for s in data['sections']] + ["Back"]
-    section_title = questionary.select("Select Section to manage items:", choices=section_choices).ask()
+    section_title = questionary.rawselect("Select Section to manage items:", choices=section_choices).ask()
     if section_title == "Back" or not section_title: return data
     
     section = next(s for s in data['sections'] if s['title'] == section_title)
     
     while True:
         item_choices = [f"{i.get('title', 'Untitled')} - {i.get('date', '')}" for i in section.get('items', [])] + ["Add New Item", "Back"]
-        choice = questionary.select(f"Items in {section_title}:", choices=item_choices).ask()
+        choice = questionary.rawselect(f"Items in {section_title}:", choices=item_choices).ask()
         
         if choice == "Back" or not choice:
             break
         elif choice == "Add New Item":
-            title = questionary.text("Item Title (e.g. University Name or Job Title):").ask()
-            date = questionary.text("Date (e.g. May 2024 - August 2024):").ask()
-            subtitle = questionary.text("Item Subtitle (e.g. Degree or Company Name) [Optional]:").ask()
-            item = {"title": title, "date": date, "subtitle": subtitle, "details": []}
+            role = questionary.text("Role/Title [Optional]:").ask()
+            company = questionary.text("Company/School [Optional]:").ask()
+            location = questionary.text("Location [Optional]:").ask()
+            date = questionary.text("Date (e.g. May 2024 - August 2024) [Optional]:").ask()
+            subtitle = questionary.text("Item Subtitle (e.g. Degree or GPA) [Optional]:").ask()
+            item = {"role": role, "company": company, "location": location, "date": date, "subtitle": subtitle, "details": []}
             while True:
                 if not questionary.confirm("Add a detail (bullet point or prose)?").ask():
                     break
-                detail_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"]).ask()
+                detail_type = questionary.rawselect("Detail Style:", choices=["Bullet Point", "Prose"]).ask()
                 text = questionary.text("Enter text:").ask()
                 item['details'].append({"is_bullet": detail_type == "Bullet Point", "text": text})
             section.setdefault('items', []).append(item)
@@ -172,7 +174,7 @@ def manage_items(data):
             item = section['items'][idx]
             
             while True:
-                action = questionary.select(
+                action = questionary.rawselect(
                     f"Action for {item.get('title')}:",
                     choices=["Edit Item Header", "Manage Details", "Delete Item", "Back"]
                 ).ask()
@@ -180,9 +182,11 @@ def manage_items(data):
                 if action == "Back" or not action:
                     break
                 elif action == "Edit Item Header":
-                    item['title'] = questionary.text("Item Title:", default=item.get('title', '')).ask() or item['title']
-                    item['date'] = questionary.text("Date:", default=item.get('date', '')).ask() or item['date']
-                    item['subtitle'] = questionary.text("Item Subtitle:", default=item.get('subtitle', '')).ask() or item['subtitle']
+                    item['role'] = questionary.text("Role/Title:", default=item.get('role', '')).ask()
+                    item['company'] = questionary.text("Company/School:", default=item.get('company', '')).ask()
+                    item['location'] = questionary.text("Location:", default=item.get('location', '')).ask()
+                    item['date'] = questionary.text("Date:", default=item.get('date', '')).ask()
+                    item['subtitle'] = questionary.text("Item Subtitle:", default=item.get('subtitle', '')).ask()
                 elif action == "Delete Item":
                     if questionary.confirm(f"Delete {item.get('title')}?").ask():
                         section['items'].pop(idx)
@@ -191,18 +195,18 @@ def manage_items(data):
                 elif action == "Manage Details":
                     while True:
                         det_choices = [f"[{'Bullet' if d.get('is_bullet') else 'Prose'}] {d.get('text', '')[:30]}..." for d in item.get('details', [])] + ["Add New Detail", "Back"]
-                        d_choice = questionary.select("Select Detail:", choices=det_choices).ask()
+                        d_choice = questionary.rawselect("Select Detail:", choices=det_choices).ask()
                         if d_choice == "Back" or not d_choice: break
                         elif d_choice == "Add New Detail":
-                            detail_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"]).ask()
+                            detail_type = questionary.rawselect("Detail Style:", choices=["Bullet Point", "Prose"]).ask()
                             text = questionary.text("Enter text:").ask()
                             item.setdefault('details', []).append({"is_bullet": detail_type == "Bullet Point", "text": text})
                         else:
                             d_idx = det_choices.index(d_choice)
-                            d_act = questionary.select("Action:", choices=["Edit", "Delete", "Back"]).ask()
+                            d_act = questionary.rawselect("Action:", choices=["Edit", "Delete", "Back"]).ask()
                             if d_act == "Edit":
                                 d = item['details'][d_idx]
-                                d_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"], default="Bullet Point" if d.get('is_bullet') else "Prose").ask()
+                                d_type = questionary.rawselect("Detail Style:", choices=["Bullet Point", "Prose"], default="Bullet Point" if d.get('is_bullet') else "Prose").ask()
                                 d['is_bullet'] = (d_type == "Bullet Point")
                                 d['text'] = questionary.text("Enter text:", default=d.get('text', '')).ask() or d['text']
                             elif d_act == "Delete":
@@ -223,7 +227,11 @@ def preview_resume_terminal(data):
         console.print(f"[bold magenta]{section.get('title', '')}[/bold magenta]")
         console.print("[magenta]" + "-"*40 + "[/magenta]")
         for item in section.get('items', []):
-            header = f"[bold green]{item.get('title', '')}[/bold green]"
+            header_parts = []
+            if item.get('role'): header_parts.append(f"[bold green]{item.get('role')}[/bold green]")
+            if item.get('company'): header_parts.append(f"[green]{', ' if item.get('role') else ''}{item.get('company')}[/green]")
+            if item.get('location'): header_parts.append(f"[bold green] – {item.get('location')}[/bold green]")
+            header = "".join(header_parts)
             if item.get('date'): header += f"  [yellow]({item.get('date')})[/yellow]"
             console.print(header)
             if item.get('subtitle'):
@@ -251,7 +259,7 @@ def edit_resume_menu(filepath):
         # Save on every menu cycle
         save_resume(filepath, data)
         console.print(f"\n[bold cyan]--- Editing {filepath.name} ---[/bold cyan]")
-        choice = questionary.select(
+        choice = questionary.rawselect(
             "What would you like to do?",
             choices=[
                 "Edit Contact Info",
@@ -282,7 +290,7 @@ def main():
     console.print("[bold magenta]Welcome to The Free Resume Builder![/bold magenta]")
     
     while True:
-        choice = questionary.select(
+        choice = questionary.rawselect(
             "Main Menu:",
             choices=[
                 "Select/Edit Resume",
