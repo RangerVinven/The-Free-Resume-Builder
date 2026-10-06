@@ -130,10 +130,30 @@ def edit_contact_info(data):
 
 def manage_sections(data):
     while True:
-        choices = [f"Edit: {s['title']}" for s in data.get('sections', [])] + ['Add New Section', 'Back']
+        choices = [f"Edit: {s['title']}" for s in data.get('sections', [])]
+        if len(data.get('sections', [])) > 1:
+            choices.append('Re-order Sections')
+        choices.extend(['Add New Section', 'Back'])
+        
         choice = questionary.select('Manage Sections & Items:', choices=choices, use_shortcuts=True).ask()
+        
         if choice == 'Back' or not choice:
             break
+        elif choice == 'Re-order Sections':
+            while True:
+                sec_list = [s['title'] for s in data['sections']] + ['Done']
+                to_move = questionary.select('Select section to move:', choices=sec_list, use_shortcuts=True).ask()
+                if to_move == 'Done' or not to_move:
+                    break
+                
+                idx = sec_list.index(to_move)
+                pos_choices = [str(i + 1) for i in range(len(data['sections']))]
+                new_pos_str = questionary.select(f"Move '{to_move}' to position:", choices=pos_choices, use_shortcuts=True).ask()
+                if new_pos_str:
+                    new_pos = int(new_pos_str) - 1
+                    section_to_move = data['sections'].pop(idx)
+                    data['sections'].insert(new_pos, section_to_move)
+                    console.print(f"[green]Moved {to_move} to position {new_pos + 1}[/green]")
         elif choice == 'Add New Section':
             title = questionary.text('Section Title (e.g. EDUCATION, EXPERIENCE, SKILLS):').ask()
             if title:
@@ -152,12 +172,34 @@ def manage_sections(data):
                 ]
                 if section.get('items'):
                     sec_choices.append("Edit Items")
+                    if len(section.get('items')) > 1:
+                        sec_choices.append("Re-order Items")
                 sec_choices.append("Back")
                 
                 sec_choice = questionary.select(f"Section [{section['title']}]:", choices=sec_choices, use_shortcuts=True).ask()
                 
                 if sec_choice == "Back" or not sec_choice:
                     break
+                elif sec_choice == "Re-order Items":
+                    while True:
+                        if section.get('is_skills'):
+                            item_labels = [f"{i.get('category', 'Untitled')}" for i in section.get('items', [])]
+                        else:
+                            item_labels = [f"{i.get('role', i.get('company', 'Untitled'))} - {i.get('date', '')}" for i in section.get('items', [])]
+                        
+                        item_list = item_labels + ['Done']
+                        to_move = questionary.select('Select item to move:', choices=item_list, use_shortcuts=True).ask()
+                        if to_move == 'Done' or not to_move:
+                            break
+                        
+                        item_idx = item_list.index(to_move)
+                        pos_choices = [str(i + 1) for i in range(len(section['items']))]
+                        new_pos_str = questionary.select(f"Move item to position:", choices=pos_choices, use_shortcuts=True).ask()
+                        if new_pos_str:
+                            new_pos = int(new_pos_str) - 1
+                            item_to_move = section['items'].pop(item_idx)
+                            section['items'].insert(new_pos, item_to_move)
+                            console.print(f"[green]Moved item to position {new_pos + 1}[/green]")
                 elif sec_choice == "Rename Section":
                     new_title = questionary.text("New Title:", default=section['title']).ask()
                     if new_title:
