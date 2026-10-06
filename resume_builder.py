@@ -35,6 +35,13 @@ def save_resume(filepath, data):
     with open(filepath, 'w') as f:
         json.dump(data, f, indent=4)
 
+
+def confirm_deletion(item_name):
+    if questionary.confirm(f"Are you sure you want to delete {item_name}?").ask():
+        if questionary.confirm("ARE YOU SURE?").ask():
+            return True
+    return False
+
 def options_menu():
     settings = load_settings()
     while True:
@@ -51,6 +58,24 @@ def options_menu():
                     console.print(f'[green]Saved API key for {provider}![/green]')
         else:
             break
+
+
+def delete_resume():
+    resumes = list(RESUMES_DIR.glob('*.json'))
+    if not resumes:
+        console.print("[yellow]No resumes to delete.[/yellow]")
+        return
+    choices = [r.name for r in resumes] + ["Back"]
+    choice = questionary.select("Select a resume to delete:", choices=choices, use_shortcuts=True).ask()
+    if choice == "Back" or not choice:
+        return
+    
+    confirm_text = questionary.text(f"Type '{choice}' to confirm deletion:").ask()
+    if confirm_text == choice:
+        (RESUMES_DIR / choice).unlink()
+        console.print(f"[green]Deleted {choice}[/green]")
+    else:
+        console.print("[red]Deletion cancelled.[/red]")
 
 def create_resume():
     name = questionary.text('Full Name:').ask()
@@ -105,12 +130,14 @@ def manage_sections(data):
             section = data['sections'][idx]
             
             while True:
-                item_list = [f"Edit Item: {i.get('role', i.get('company', 'Untitled'))} - {i.get('date', '')}" for i in section.get('items', [])]
                 sec_choices = [
                     "Rename Section",
                     "Delete Section",
                     "Add New Item",
-                ] + item_list + ["Back"]
+                ]
+                if section.get('items'):
+                    sec_choices.append("Edit Items")
+                sec_choices.append("Back")
                 
                 sec_choice = questionary.select(f"Section [{section['title']}]:", choices=sec_choices, use_shortcuts=True).ask()
                 
@@ -122,7 +149,7 @@ def manage_sections(data):
                         section['title'] = new_title.upper()
                         console.print(f"[green]Renamed to {section['title']}[/green]")
                 elif sec_choice == "Delete Section":
-                    if questionary.confirm(f"Are you sure you want to delete {section['title']}?").ask():
+                    if confirm_deletion(f"section '{section['title']}'"):
                         data['sections'].pop(idx)
                         console.print("[green]Deleted section[/green]")
                         break
@@ -141,49 +168,58 @@ def manage_sections(data):
                         item['details'].append({"is_bullet": detail_type == "Bullet Point", "text": text})
                     section.setdefault('items', []).append(item)
                     console.print(f"[green]Added item[/green]")
-                else:
-                    item_idx = sec_choices.index(sec_choice) - 3
-                    item = section['items'][item_idx]
-                    
+                elif sec_choice == "Edit Items":
                     while True:
-                        action = questionary.select(
-                            f"Action for {item.get('role', item.get('company', 'Untitled'))}:",
-                            choices=["Edit Item Header", "Manage Details", "Delete Item", "Back"],
-                            use_shortcuts=True
-                        ).ask()
-                        
-                        if action == "Back" or not action:
+                        item_list = [f"{i.get('role', i.get('company', 'Untitled'))} - {i.get('date', '')}" for i in section.get('items', [])] + ["Back"]
+                        item_choice = questionary.select("Select Item to Edit:", choices=item_list, use_shortcuts=True).ask()
+                        if item_choice == "Back" or not item_choice:
                             break
-                        elif action == "Edit Item Header":
-                            item['role'] = questionary.text("Role/Title:", default=item.get('role', '')).ask()
-                            item['company'] = questionary.text("Company/School:", default=item.get('company', '')).ask()
-                            item['location'] = questionary.text("Location:", default=item.get('location', '')).ask()
-                            item['date'] = questionary.text("Date:", default=item.get('date', '')).ask()
-                            item['subtitle'] = questionary.text("Item Subtitle:", default=item.get('subtitle', '')).ask()
-                        elif action == "Delete Item":
-                            if questionary.confirm(f"Delete item?").ask():
-                                section['items'].pop(item_idx)
-                                console.print("[green]Deleted item[/green]")
+                        item_idx = item_list.index(item_choice)
+                        item = section['items'][item_idx]
+                        
+                        while True:
+                            action = questionary.select(
+                                f"Action for {item.get('role', item.get('company', 'Untitled'))}:",
+                                choices=["Edit Item Header", "Manage Details", "Delete Item", "Back"],
+                                use_shortcuts=True
+                            ).ask()
+                            
+                            if action == "Back" or not action:
                                 break
-                        elif action == "Manage Details":
-                            while True:
-                                det_choices = [f"[{'Bullet' if d.get('is_bullet') else 'Prose'}] {d.get('text', '')[:30]}..." for d in item.get('details', [])] + ["Add New Detail", "Back"]
-                                d_choice = questionary.select("Select Detail:", choices=det_choices, use_shortcuts=True).ask()
-                                if d_choice == "Back" or not d_choice: break
-                                elif d_choice == "Add New Detail":
-                                    detail_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"], use_shortcuts=True).ask()
-                                    text = questionary.text("Enter text:").ask()
-                                    item.setdefault('details', []).append({"is_bullet": detail_type == "Bullet Point", "text": text})
-                                else:
-                                    d_idx = det_choices.index(d_choice)
-                                    d_act = questionary.select("Action:", choices=["Edit", "Delete", "Back"], use_shortcuts=True).ask()
-                                    if d_act == "Edit":
-                                        d = item['details'][d_idx]
-                                        d_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"], default="Bullet Point" if d.get('is_bullet') else "Prose", use_shortcuts=True).ask()
-                                        d['is_bullet'] = (d_type == "Bullet Point")
-                                        d['text'] = questionary.text("Enter text:", default=d.get('text', '')).ask() or d['text']
-                                    elif d_act == "Delete":
-                                        item['details'].pop(d_idx)
+                            elif action == "Edit Item Header":
+                                item['role'] = questionary.text("Role/Title:", default=item.get('role', '')).ask()
+                                item['company'] = questionary.text("Company/School:", default=item.get('company', '')).ask()
+                                item['location'] = questionary.text("Location:", default=item.get('location', '')).ask()
+                                item['date'] = questionary.text("Date:", default=item.get('date', '')).ask()
+                                item['subtitle'] = questionary.text("Item Subtitle:", default=item.get('subtitle', '')).ask()
+                            elif action == "Delete Item":
+                                if confirm_deletion("item"):
+                                    section['items'].pop(item_idx)
+                                    console.print("[green]Deleted item[/green]")
+                                    break
+                            elif action == "Manage Details":
+                                while True:
+                                    det_choices = [f"[{'Bullet' if d.get('is_bullet') else 'Prose'}] {d.get('text', '')[:30]}..." for d in item.get('details', [])] + ["Add New Detail", "Back"]
+                                    d_choice = questionary.select("Select Detail:", choices=det_choices, use_shortcuts=True).ask()
+                                    if d_choice == "Back" or not d_choice: break
+                                    elif d_choice == "Add New Detail":
+                                        detail_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"], use_shortcuts=True).ask()
+                                        text = questionary.text("Enter text:").ask()
+                                        item.setdefault('details', []).append({"is_bullet": detail_type == "Bullet Point", "text": text})
+                                    else:
+                                        d_idx = det_choices.index(d_choice)
+                                        d_act = questionary.select("Action:", choices=["Edit", "Delete", "Back"], use_shortcuts=True).ask()
+                                        if d_act == "Edit":
+                                            d = item['details'][d_idx]
+                                            d_type = questionary.select("Detail Style:", choices=["Bullet Point", "Prose"], default="Bullet Point" if d.get('is_bullet') else "Prose", use_shortcuts=True).ask()
+                                            d['is_bullet'] = (d_type == "Bullet Point")
+                                            d['text'] = questionary.text("Enter text:", default=d.get('text', '')).ask() or d['text']
+                                        elif d_act == "Delete":
+                                            if confirm_deletion("detail"):
+                                                item['details'].pop(d_idx)
+                        # Re-break if the item was deleted so we refresh the item list
+                        if item not in section['items']:
+                            break
     return data
 
 def preview_resume_terminal(data):
@@ -248,7 +284,7 @@ def main():
     init_app()
     console.print('[bold magenta]Welcome to The Free Resume Builder![/bold magenta]')
     while True:
-        choice = questionary.select('Main Menu:', choices=['Select/Edit Resume', 'Create New Resume', 'Options', 'Exit'], use_shortcuts=True).ask()
+        choice = questionary.select('Main Menu:', choices=['Select/Edit Resume', 'Create New Resume', 'Delete a Resume', 'Options', 'Exit'], use_shortcuts=True).ask()
         if choice == 'Select/Edit Resume':
             filepath = select_resume()
             if filepath:
@@ -257,6 +293,8 @@ def main():
             filepath = create_resume()
             if filepath:
                 edit_resume_menu(filepath)
+        elif choice == 'Delete a Resume':
+            delete_resume()
         elif choice == 'Options':
             options_menu()
         else:
