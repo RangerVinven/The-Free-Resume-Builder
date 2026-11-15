@@ -157,10 +157,16 @@
                 <span>AI Builder</span>
               </button>
             </div>
-            <button type="button" id="btnToggleEditorMode" class="btn btn-secondary btn-xs" title="Switch between Manual Wizard and AI Builder">
-              <i data-lucide="arrow-left-right"></i>
-              <span id="toggleEditorModeLabel">Switch to AI Builder</span>
-            </button>
+            <div class="editor-mode-actions">
+              <button type="button" id="btnTargetJob" class="btn btn-secondary btn-xs" title="Attach a Target Role and Job Description for AI tailoring">
+                <i data-lucide="briefcase"></i>
+                <span id="targetJobBtnLabel">Target Job</span>
+              </button>
+              <button type="button" id="btnToggleEditorMode" class="btn btn-secondary btn-xs" title="Switch between Manual Wizard and AI Builder">
+                <i data-lucide="arrow-left-right"></i>
+                <span id="toggleEditorModeLabel">Switch to AI Builder</span>
+              </button>
+            </div>
           </div>
 
           <div id="manualEditorView" class="editor-mode-view">
@@ -759,6 +765,38 @@
           </button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal: Target Job Description -->
+  <div id="modalTargetJob" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalTargetJobTitle">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <h3 id="modalTargetJobTitle">Target Job Description</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalTargetJob" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <form id="formTargetJob">
+        <div class="modal-body">
+          <p class="modal-description">Attach a target role and job description to tailor AI suggestions and bullet alignment. This context is saved with the resume and is never included in exported files.</p>
+          <div class="form-field">
+            <label for="inputTargetJobTitle">Target Role / Company <span class="label-optional">(optional)</span></label>
+            <input id="inputTargetJobTitle" type="text" class="input-control" placeholder="e.g. Senior Backend Engineer at Acme Corp" />
+          </div>
+          <div class="form-field">
+            <label for="inputJobDescription">Job Description</label>
+            <textarea id="inputJobDescription" class="textarea-control textarea-jd" rows="8" placeholder="Paste the responsibilities, requirements, and preferred qualifications here..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer modal-footer-between">
+          <button type="button" id="btnClearTargetJob" class="btn btn-ghost">Clear</button>
+          <div class="modal-footer-actions">
+            <button type="button" class="btn btn-secondary" data-close="modalTargetJob">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Target Job</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 

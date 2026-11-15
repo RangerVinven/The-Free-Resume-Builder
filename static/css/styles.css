@@ -1488,6 +1488,16 @@ textarea:focus-visible {
   background-color: var(--bg-subtle);
 }
 
+.modal-footer-between {
+  justify-content: space-between;
+}
+
+.modal-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .mono-code {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1638,6 +1648,15 @@ textarea:focus-visible {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-context-job {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--blue-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1842,6 +1861,29 @@ textarea:focus-visible {
   background-color: var(--bg-subtle);
   border-bottom: 1px solid var(--border-default);
   flex-shrink: 0;
+}
+
+.editor-mode-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#btnTargetJob.has-target-job {
+  background-color: var(--blue-tint);
+  border-color: var(--blue-tint-border);
+  color: var(--blue-primary);
+}
+
+#btnTargetJob.has-target-job:hover {
+  background-color: var(--blue-tint-border);
+}
+
+.textarea-jd {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.5;
 }
 
 .editor-mode-group {

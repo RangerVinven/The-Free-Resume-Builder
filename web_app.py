@@ -24,6 +24,7 @@ from db import (
     normalize_resume_schema,
     revert_version_db,
     update_resume_db,
+    update_target_job_db,
 )
 from resume_builder import (
     TEMPLATE_PATH,
@@ -91,10 +92,26 @@ def create_resume_api():
         return jsonify({"error": "Full Name is required."}), 400
 
     try:
-        created = create_resume_db(payload)
+        created = create_resume_db(
+            payload,
+            target_job_title=_clean_str(payload.get("target_job_title")),
+            job_description=(payload.get("job_description") or "") if isinstance(payload.get("job_description"), str) else "",
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(created), 201
+
+
+@app.route("/api/resumes/<int:resume_id>/target-job", methods=["PUT"])
+def update_target_job_api(resume_id):
+    ensure_db()
+    payload = request.get_json(silent=True) or {}
+    target_job_title = _clean_str(payload.get("target_job_title"))
+    job_description = payload.get("job_description") if isinstance(payload.get("job_description"), str) else ""
+    updated = update_target_job_db(resume_id, target_job_title, job_description)
+    if not updated:
+        return jsonify({"error": "Resume not found."}), 404
+    return jsonify(updated)
 
 
 @app.route("/api/resumes/import", methods=["POST"])
@@ -351,7 +368,33 @@ SHARED_BULLET_GUIDE = (
 )
 
 
-def build_bullet_system_prompt(context: dict) -> str:
+def build_job_context_block(target_job_title: str = "", job_description: str = "") -> str:
+    """Format attached target job description and non-fabrication tailoring rules."""
+    title = _clean_str(target_job_title)
+    jd = (job_description or "").strip()
+    if not title and not jd:
+        return ""
+
+    clipped_jd = jd[:6000] + ("\n...[truncated]" if len(jd) > 6000 else "")
+    lines = ["Target Job Context (for tailoring wording, ordering, and gap analysis):"]
+    if title:
+        lines.append(f"Target Role: {title}")
+    if clipped_jd:
+        lines.append(f"Job Description:\n```text\n{clipped_jd}\n```")
+    lines.append(
+        "Job Description Tailoring Rules:\n"
+        "- Align wording, emphasize relevant experiences, and prioritize matching skills ONLY using facts already in the resume or explicitly confirmed by the user.\n"
+        "- NEVER fabricate or silently inject unconfirmed skills, tools, frameworks, certifications, or responsibilities from the job description.\n"
+        "- If a high-priority JD requirement is missing from the resume, explicitly ask the user whether they have experience with it before adding anything."
+    )
+    return "\n\n" + "\n".join(lines)
+
+
+def build_bullet_system_prompt(
+    context: dict,
+    target_job_title: str = "",
+    job_description: str = "",
+) -> str:
     """Build a focused, factual system prompt for drafting or refining resume details."""
     section = context.get("section_title") or "EXPERIENCE"
     role = context.get("role") or ""
@@ -393,10 +436,12 @@ def build_bullet_system_prompt(context: dict) -> str:
         )
     )
 
+    job_block = build_job_context_block(target_job_title, job_description)
+
     return (
         "You are a precise, practical resume writing coach helping the user craft a single "
         f"{style_label} for their resume.\n\n"
-        f"Resume Entry Context:\n{ctx_block}\n\n"
+        f"Resume Entry Context:\n{ctx_block}{job_block}\n\n"
         f"{style_section}"
         "Interaction Guidelines:\n"
         "1. Never invent metrics, technologies, responsibilities, or achievements the user has not stated.\n"
@@ -417,16 +462,21 @@ def build_bullet_system_prompt(context: dict) -> str:
     )
 
 
-def build_full_resume_system_prompt(resume_data: dict) -> str:
+def build_full_resume_system_prompt(
+    resume_data: dict,
+    target_job_title: str = "",
+    job_description: str = "",
+) -> str:
     """Build the system prompt for conversational full-resume construction."""
     snapshot = normalize_resume_schema(resume_data or {})
     snapshot.pop("_history", None)
     snapshot_json = json.dumps(snapshot, indent=2)
+    job_block = build_job_context_block(target_job_title, job_description)
 
     return (
         "You are an expert, practical resume architect collaborating step-by-step with the user to build "
         "or refine their complete resume.\n\n"
-        f"Current Resume JSON State:\n```json\n{snapshot_json}\n```\n\n"
+        f"Current Resume JSON State:\n```json\n{snapshot_json}\n```{job_block}\n\n"
         "Exact Target Schema for `updated_resume`:\n"
         "{\n"
         '  "name": "Full Name",\n'
@@ -681,15 +731,26 @@ def ai_assist_api():
     if not api_key:
         return jsonify({"error": f"No {provider} API key configured. Open Settings to add your key."}), 400
 
+    target_job_title = _clean_str(payload.get("target_job_title"))
+    job_description = payload.get("job_description") if isinstance(payload.get("job_description"), str) else ""
+
     if mode == "full_resume":
         existing_resume = payload.get("resume_data") or {}
         if not messages:
             messages = [{"role": "user", "content": "Let's build or refine my resume. Ask me what I'd like to include."}]
-        system_prompt = build_full_resume_system_prompt(existing_resume)
+        system_prompt = build_full_resume_system_prompt(
+            existing_resume,
+            target_job_title=target_job_title,
+            job_description=job_description,
+        )
     else:
         if not messages:
             messages = [{"role": "user", "content": "Help me draft this resume item. Ask me clarifying questions about what I did if needed."}]
-        system_prompt = build_bullet_system_prompt(context)
+        system_prompt = build_bullet_system_prompt(
+            context,
+            target_job_title=target_job_title,
+            job_description=job_description,
+        )
 
     try:
         result = caller_fn(api_key, model, system_prompt, messages)

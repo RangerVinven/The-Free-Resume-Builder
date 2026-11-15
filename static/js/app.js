@@ -31,6 +31,8 @@
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
     editorMode: 'manual', // 'manual' | 'ai'
+    targetJobTitle: '',
+    jobDescription: '',
     fullAiMessages: [], // { role: 'user'|'assistant', content: string, changes?: string[] }
     fullAiLoading: false,
     lastAiUndoState: null, // deep copy of resume data prior to latest AI edit
@@ -70,6 +72,8 @@
     wizardView: document.getElementById('wizardView'),
     modeManualEditor: document.getElementById('modeManualEditor'),
     modeAiBuilder: document.getElementById('modeAiBuilder'),
+    btnTargetJob: document.getElementById('btnTargetJob'),
+    targetJobBtnLabel: document.getElementById('targetJobBtnLabel'),
     btnToggleEditorMode: document.getElementById('btnToggleEditorMode'),
     toggleEditorModeLabel: document.getElementById('toggleEditorModeLabel'),
     manualEditorView: document.getElementById('manualEditorView'),
@@ -168,6 +172,12 @@
     modalCreateMode: document.getElementById('modalCreateMode'),
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
     btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
+
+    modalTargetJob: document.getElementById('modalTargetJob'),
+    formTargetJob: document.getElementById('formTargetJob'),
+    inputTargetJobTitle: document.getElementById('inputTargetJobTitle'),
+    inputJobDescription: document.getElementById('inputJobDescription'),
+    btnClearTargetJob: document.getElementById('btnClearTargetJob'),
 
     // Full-Resume AI Builder View
     fullAiModelBadge: document.getElementById('fullAiModelBadge'),
@@ -351,6 +361,8 @@
     state.aiOpen = false;
     state.aiTarget = null;
     state.editorMode = 'manual';
+    state.targetJobTitle = '';
+    state.jobDescription = '';
     state.fullAiMessages = [];
     state.fullAiLoading = false;
     state.lastAiUndoState = null;
@@ -376,6 +388,7 @@
     // Reset preview mode to live HTML when entering wizard
     setPreviewMode('live');
     updateWizardHeaderMeta();
+    updateTargetJobBadge();
     bindContactFields();
     renderWizardStep();
     renderPreview();
@@ -596,6 +609,8 @@
     state.activeResumeSlug = 'resume';
     state.wizardStep = 1;
     state.activeSectionIdx = 0;
+    state.targetJobTitle = '';
+    state.jobDescription = '';
     state.fullAiMessages = [];
     state.lastAiUndoState = null;
     state.data = {
@@ -618,6 +633,8 @@
     state.isNewResume = false;
     state.activeResumeId = res.id;
     state.activeResumeSlug = res.slug || 'resume';
+    state.targetJobTitle = res.target_job_title || '';
+    state.jobDescription = res.job_description || '';
     state.data = res.data;
     if (!Array.isArray(state.data.sections)) {
       state.data.sections = [];
@@ -701,6 +718,8 @@
           portfolio: state.data.portfolio,
           linkedin: state.data.linkedin,
           sections: Array.isArray(state.data.sections) ? state.data.sections : [],
+          target_job_title: state.targetJobTitle,
+          job_description: state.jobDescription,
         }),
       });
       state.isNewResume = false;
@@ -1853,6 +1872,77 @@
     }
   }
 
+  function hasTargetJob() {
+    return Boolean((state.targetJobTitle || '').trim() || (state.jobDescription || '').trim());
+  }
+
+  function updateTargetJobBadge() {
+    if (!el.btnTargetJob || !el.targetJobBtnLabel) return;
+    const active = hasTargetJob();
+    el.btnTargetJob.classList.toggle('has-target-job', active);
+    const title = (state.targetJobTitle || '').trim();
+    if (title) {
+      const shortTitle = title.length > 24 ? `${title.slice(0, 22)}...` : title;
+      el.targetJobBtnLabel.textContent = `Target: ${shortTitle}`;
+    } else if ((state.jobDescription || '').trim()) {
+      el.targetJobBtnLabel.textContent = 'Target Job Set';
+    } else {
+      el.targetJobBtnLabel.textContent = 'Target Job';
+    }
+  }
+
+  function openTargetJobModal() {
+    el.inputTargetJobTitle.value = state.targetJobTitle || '';
+    el.inputJobDescription.value = state.jobDescription || '';
+    openModal(el.modalTargetJob);
+    if (window.lucide) lucide.createIcons();
+    el.inputTargetJobTitle.focus();
+  }
+
+  async function persistTargetJob(title, jd) {
+    state.targetJobTitle = (title || '').trim();
+    state.jobDescription = (jd || '').trim();
+    updateTargetJobBadge();
+    renderFullAiQuickChips();
+    if (state.aiOpen) {
+      renderAiContextBar();
+      renderAiQuickChips();
+    }
+
+    if (!state.isNewResume && state.activeResumeId) {
+      await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/target-job`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          target_job_title: state.targetJobTitle,
+          job_description: state.jobDescription,
+        }),
+      });
+    }
+  }
+
+  async function saveTargetJob(e) {
+    e.preventDefault();
+    try {
+      await persistTargetJob(el.inputTargetJobTitle.value, el.inputJobDescription.value);
+      closeModal(el.modalTargetJob);
+      showToast(hasTargetJob() ? 'Target job saved.' : 'Target job cleared.', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function clearTargetJob() {
+    try {
+      el.inputTargetJobTitle.value = '';
+      el.inputJobDescription.value = '';
+      await persistTargetJob('', '');
+      closeModal(el.modalTargetJob);
+      showToast('Target job cleared.', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
   function renderAiContextBar() {
     const objs = getAiTargetObjects();
     if (!objs) return;
@@ -1863,9 +1953,13 @@
     const headerBits = [item.role, item.company, item.subtitle].filter(Boolean);
     const entryText = headerBits.length > 0 ? headerBits.join(' — ') : 'General Entry';
     const currentDraft = (detail.text || '').trim();
+    const targetJobLine = hasTargetJob()
+      ? `<div class="ai-context-job">Target Job: ${escapeHtml((state.targetJobTitle || '').trim() || 'Job description attached')}</div>`
+      : '';
 
     el.aiContextBar.innerHTML = `
       <div class="ai-context-entry">${escapeHtml((sec.title || '').toUpperCase())} &bull; ${escapeHtml(entryText)}</div>
+      ${targetJobLine}
       ${currentDraft ? `<div class="ai-context-draft">Current draft: ${escapeHtml(currentDraft)}</div>` : '<div class="ai-context-draft">Empty box &mdash; ready to draft from your notes</div>'}
     `;
   }
@@ -1887,12 +1981,19 @@
           { label: 'Show 3 role examples', prompt: 'Show me 3 realistic example bullets for this role so I can pick a style and customize it.' },
         ];
 
+    if (hasTargetJob()) {
+      chips.unshift({
+        label: 'Align bullet to target job',
+        prompt: 'Rewrite or suggest improvements for this bullet to align with the Target Job Description, strictly using real facts and experience without inventing unconfirmed skills or metrics.',
+      });
+    }
+
     chips.forEach((chip) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'ai-quick-chip';
       btn.textContent = chip.label;
-      btn.disabled = !state.aiConfig.hasOpenAIKey || state.aiLoading;
+      btn.disabled = !state.aiConfig.hasActiveKey || state.aiLoading;
       btn.addEventListener('click', () => sendAiMessage(chip.prompt));
       el.aiQuickChips.appendChild(btn);
     });
@@ -2016,9 +2117,9 @@
     const objs = getAiTargetObjects();
     if (!objs) return;
 
-    if (!state.aiConfig.hasOpenAIKey) {
+    if (!state.aiConfig.hasActiveKey) {
       el.aiKeyMissingBanner.hidden = false;
-      showToast('Configure your OpenAI API key in Settings first.', 'error');
+      showToast(`Configure your ${state.aiConfig.provider || 'AI'} API key in Settings first.`, 'error');
       return;
     }
 
@@ -2045,6 +2146,8 @@
         method: 'POST',
         body: JSON.stringify({
           mode: 'bullet',
+          target_job_title: state.targetJobTitle,
+          job_description: state.jobDescription,
           context: {
             section_title: sec.title || '',
             role: item.role || '',
@@ -2169,6 +2272,19 @@
           { label: 'I will paste my notes / background', prompt: 'I want to paste my rough background and work history so you can structure it into my resume.' },
         ];
 
+    if (hasTargetJob()) {
+      chips.unshift(
+        {
+          label: 'Analyze match & gaps',
+          prompt: 'Compare my current resume against the Target Job Description. List strong matches, reframing opportunities using truthful phrasing from my real work, and ask concise questions about any missing requirements before changing anything.',
+        },
+        {
+          label: 'Tailor bullets & skills to JD',
+          prompt: 'Tailor my existing skills ordering and bullet phrasing to better match the Target Job Description, strictly using facts already in my resume without inventing new skills or metrics.',
+        },
+      );
+    }
+
     chips.forEach((chip) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -2258,6 +2374,8 @@
         body: JSON.stringify({
           mode: 'full_resume',
           resume_data: resumeSnapshot,
+          target_job_title: state.targetJobTitle,
+          job_description: state.jobDescription,
           messages: apiMessages,
         }),
       });
@@ -2479,7 +2597,7 @@
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode, el.modalTargetJob].forEach(closeModal);
       }
     });
 
@@ -2490,6 +2608,11 @@
         if (target) closeModal(target);
       });
     });
+
+    // Target Job Modal
+    el.btnTargetJob.addEventListener('click', openTargetJobModal);
+    el.formTargetJob.addEventListener('submit', saveTargetJob);
+    el.btnClearTargetJob.addEventListener('click', clearTargetJob);
 
     // Edit Section Modal
     el.selectSectionFormat.addEventListener('change', updateSectionFormatHint);
