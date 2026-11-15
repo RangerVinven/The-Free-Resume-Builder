@@ -5,4 +5,5 @@ resumes.db*
 *_generated.docx
 *_generated.pdf
 settings.json
+data/
 .DS_Store

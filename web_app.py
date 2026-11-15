@@ -76,6 +76,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    ensure_db()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/resumes", methods=["GET"])
 def list_resumes():
     ensure_db()
@@ -717,4 +723,6 @@ def ai_assist_api():
 
 if __name__ == "__main__":
     ensure_db()
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5050"))
+    app.run(host=host, port=port, debug=False)

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 import questionary
@@ -19,7 +20,8 @@ from convert_to_pdf import convert_docx_to_pdf
 
 console = Console()
 TEMPLATE_PATH = Path('Base_Template.docx')
-SETTINGS_PATH = Path('settings.json')
+_DATA_DIR = Path(os.environ['DATA_DIR']) if os.environ.get('DATA_DIR') else Path('.')
+SETTINGS_PATH = Path(os.environ['SETTINGS_PATH']) if os.environ.get('SETTINGS_PATH') else _DATA_DIR / 'settings.json'
 
 
 def init_app():
@@ -37,6 +39,7 @@ def load_settings():
 
 
 def save_settings(data):
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(SETTINGS_PATH, 'w') as f:
         json.dump(data, f, indent=4)
 

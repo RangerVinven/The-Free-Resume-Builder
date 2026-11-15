@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("resumes.db")
-LEGACY_RESUMES_DIR = Path("resumes")
+DATA_DIR = Path(os.environ["DATA_DIR"]) if os.environ.get("DATA_DIR") else Path(".")
+DB_PATH = Path(os.environ["DB_PATH"]) if os.environ.get("DB_PATH") else DATA_DIR / "resumes.db"
+LEGACY_RESUMES_DIR = (
+    Path(os.environ["LEGACY_RESUMES_DIR"]) if os.environ.get("LEGACY_RESUMES_DIR") else Path("resumes")
+)
 AUTO_CHECKPOINT_INTERVAL_SECONDS = 180
 
 
@@ -116,6 +120,7 @@ def _strip_history(data: dict) -> dict:
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")

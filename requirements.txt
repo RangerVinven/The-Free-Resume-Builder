@@ -2,3 +2,4 @@ docxtpl
 questionary
 rich
 flask
+gunicorn

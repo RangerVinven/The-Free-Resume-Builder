@@ -1,0 +1,17 @@
+services:
+  resume-builder:
+    build: .
+    container_name: resume-builder
+    ports:
+      - "5050:5050"
+    environment:
+      - DATA_DIR=/app/data
+      - HOST=0.0.0.0
+      - PORT=5050
+    volumes:
+      - resume_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  resume_data:
+    name: resume_builder_data
