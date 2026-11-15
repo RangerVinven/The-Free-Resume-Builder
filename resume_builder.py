@@ -1,24 +1,33 @@
 import json
-import copy
-from datetime import datetime
-
-import os
 import sys
 from pathlib import Path
 import questionary
 from rich.console import Console
-from rich.table import Table
 from docxtpl import DocxTemplate
+
+from db import (
+    create_resume_db,
+    delete_resume_db,
+    get_resume_db,
+    init_db,
+    list_resumes_db,
+    make_slug,
+    revert_version_db,
+    update_resume_db,
+)
+from convert_to_pdf import convert_docx_to_pdf
+
 console = Console()
-RESUMES_DIR = Path('resumes')
 TEMPLATE_PATH = Path('Base_Template.docx')
 SETTINGS_PATH = Path('settings.json')
 
+
 def init_app():
-    RESUMES_DIR.mkdir(exist_ok=True)
     if not TEMPLATE_PATH.exists():
         console.print(f'[red]Error: {TEMPLATE_PATH} not found. Please ensure it is in the same directory.[/red]')
         sys.exit(1)
+    init_db()
+
 
 def load_settings():
     if SETTINGS_PATH.exists():
@@ -26,31 +35,9 @@ def load_settings():
             return json.load(f)
     return {}
 
+
 def save_settings(data):
     with open(SETTINGS_PATH, 'w') as f:
-        json.dump(data, f, indent=4)
-
-def load_resume(filepath):
-    with open(filepath, 'r') as f:
-        return json.load(f)
-
-def save_resume(filepath, data):
-    if filepath.exists():
-        with open(filepath, 'r') as f:
-            try:
-                old_data = json.load(f)
-            except json.JSONDecodeError:
-                old_data = {}
-        old_compare = {k: v for k, v in old_data.items() if k != '_history'}
-        new_compare = {k: v for k, v in data.items() if k != '_history'}
-        if old_compare != new_compare and old_compare:
-            history = data.get('_history', [])
-            history.append({
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'state': old_compare
-            })
-            data['_history'] = history
-    with open(filepath, 'w') as f:
         json.dump(data, f, indent=4)
 
 
@@ -76,67 +63,98 @@ def show_help():
 
 def options_menu():
     settings = load_settings()
+    provider_defaults = {
+        'OpenAI': 'gpt-4o-mini',
+        'Gemini': 'gemini-2.5-flash',
+        'Claude': 'claude-sonnet-4-5',
+    }
     while True:
-        choice = questionary.select('Options:', choices=['Set API Keys', 'Back to Main Menu'], use_shortcuts=True).ask()
-        if choice == 'Set API Keys':
+        choice = questionary.select(
+            'Options:',
+            choices=['Set Active Provider & Model', 'Set API Keys', 'Back to Main Menu'],
+            use_shortcuts=True,
+        ).ask()
+        if choice == 'Set Active Provider & Model':
+            provider = questionary.select('Active AI Provider:', choices=['OpenAI', 'Gemini', 'Claude', 'Back'], use_shortcuts=True).ask()
+            if provider and provider != 'Back':
+                current_model = settings.get('ai', {}).get('model') or provider_defaults[provider]
+                model = questionary.text('Model:', default=current_model).ask() or provider_defaults[provider]
+                settings['ai'] = {'provider': provider, 'model': model.strip()}
+                save_settings(settings)
+                console.print(f'[green]Active provider set to {provider} ({model.strip()})![/green]')
+        elif choice == 'Set API Keys':
             provider = questionary.select('Select Provider:', choices=['OpenAI', 'Gemini', 'Claude', 'Other', 'Back'], use_shortcuts=True).ask()
             if provider and provider != 'Back':
                 key = questionary.password(f'Enter {provider} API Key:').ask()
                 if key:
-                    if 'api_keys' not in settings:
-                        settings['api_keys'] = {}
-                    settings['api_keys'][provider] = key
+                    settings.setdefault('api_keys', {})[provider] = key.strip()
                     save_settings(settings)
                     console.print(f'[green]Saved API key for {provider}![/green]')
         else:
             break
 
 
+def _pick_resume_record(prompt_text):
+    resumes = list_resumes_db()
+    if not resumes:
+        return None, []
+    labels = [
+        f"{r['name']} ({r['email'] or 'no email'}) [ID {r['id']}]"
+        for r in resumes
+    ]
+    return resumes, labels
+
+
 def delete_resume():
-    resumes = list(RESUMES_DIR.glob('*.json'))
+    resumes, labels = _pick_resume_record('Select a resume to delete:')
     if not resumes:
         console.print("[yellow]No resumes to delete.[/yellow]")
         return
-    choices = [r.name for r in resumes] + ["Back"]
-    choice = questionary.select("Select a resume to delete:", choices=choices, use_shortcuts=True).ask()
+    choice = questionary.select("Select a resume to delete:", choices=labels + ["Back"], use_shortcuts=True).ask()
     if choice == "Back" or not choice:
         return
-    
-    confirm_text = questionary.text(f"Type '{choice}' to confirm deletion:").ask()
-    if confirm_text == choice:
-        (RESUMES_DIR / choice).unlink()
-        console.print(f"[green]Deleted {choice}[/green]")
+
+    target = resumes[labels.index(choice)]
+    confirm_text = questionary.text(f"Type '{target['name']}' to confirm deletion:").ask()
+    ok, _ = delete_resume_db(target['id'], confirm_text or '')
+    if ok:
+        console.print(f"[green]Deleted {target['name']}[/green]")
     else:
         console.print("[red]Deletion cancelled.[/red]")
 
+
 def create_resume():
     name = questionary.text('Full Name:').ask()
-    if not name:
+    if not name or not name.strip():
         return None
-    phone = questionary.text('Phone Number:').ask()
-    email = questionary.text('Email:').ask()
-    portfolio = questionary.text('Portfolio Website (optional):').ask()
-    linkedin = questionary.text('LinkedIn (optional):').ask()
-    data = {'name': name, 'phone': phone, 'email': email, 'portfolio': portfolio, 'linkedin': linkedin, 'sections': []}
-    filename = name.replace(' ', '_').lower() + '.json'
-    filepath = RESUMES_DIR / filename
-    save_resume(filepath, data)
-    console.print(f'[green]Created new resume: {filename}[/green]')
-    return filepath
+    phone = questionary.text('Phone Number:').ask() or ''
+    email = questionary.text('Email:').ask() or ''
+    portfolio = questionary.text('Portfolio Website (optional):').ask() or ''
+    linkedin = questionary.text('LinkedIn (optional):').ask() or ''
+    created = create_resume_db({
+        'name': name.strip(),
+        'phone': phone.strip(),
+        'email': email.strip(),
+        'portfolio': portfolio.strip(),
+        'linkedin': linkedin.strip(),
+        'sections': [],
+    })
+    console.print(f"[green]Created new resume: {created['data']['name']} (ID {created['id']})[/green]")
+    return created['id']
+
 
 def select_resume():
-    resumes = list(RESUMES_DIR.glob('*.json'))
+    resumes, labels = _pick_resume_record('Select a resume:')
     if not resumes:
         console.print('[yellow]No resumes found. Please create one first.[/yellow]')
         return create_resume()
-    choices = [r.name for r in resumes] + ['Create New Resume', 'Back']
+    choices = labels + ['Create New Resume', 'Back']
     choice = questionary.select('Select a resume:', choices=choices, use_shortcuts=True).ask()
     if choice == 'Create New Resume':
         return create_resume()
-    elif choice == 'Back' or not choice:
+    if choice == 'Back' or not choice:
         return None
-    else:
-        return RESUMES_DIR / choice
+    return resumes[labels.index(choice)]['id']
 
 def edit_contact_info(data):
     data['name'] = questionary.text('Full Name:', default=data.get('name', '')).ask() or data.get('name')
@@ -363,71 +381,106 @@ def preview_resume_terminal(data):
                 console.print('')
     questionary.press_any_key_to_continue().ask()
 
-def generate_resume(data, filepath):
+def generate_resume(data, out_stem=None):
+    fmt = questionary.select("Export Format:", choices=["DOCX", "PDF", "JSON", "Cancel"], use_shortcuts=True).ask()
+    if not fmt or fmt == "Cancel":
+        return
+
+    stem = out_stem or make_slug(data.get('name') or 'resume')
+    if fmt == "JSON":
+        clean_export = {k: v for k, v in data.items() if k != '_history'}
+        out_json = Path(f"{stem}.json")
+        out_json.write_text(json.dumps(clean_export, indent=2), encoding='utf-8')
+        console.print(f'[green]Exported {out_json}![/green]')
+        return
+
     doc = DocxTemplate(TEMPLATE_PATH)
     doc.render(data)
-    out_name = filepath.stem + '_generated.docx'
-    doc.save(out_name)
-    console.print(f'[green]Successfully generated {out_name}![/green]')
+    out_docx = Path(f"{stem}_generated.docx")
+    doc.save(out_docx)
+    if fmt == "DOCX":
+        console.print(f'[green]Successfully generated {out_docx}![/green]')
+        return
 
-def version_history_menu(data, filepath):
+    out_pdf = convert_docx_to_pdf(out_docx)
+    if out_pdf and Path(out_pdf).exists():
+        out_docx.unlink(missing_ok=True)
+        console.print(f'[green]Successfully generated {Path(out_pdf).name}![/green]')
+    else:
+        console.print(f'[yellow]PDF conversion failed; kept {out_docx}.[/yellow]')
+
+
+def version_history_menu(resume_id):
+    record = get_resume_db(resume_id)
+    if not record:
+        return {}
+    data = record['data']
     history = data.get('_history', [])
     if not history:
-        console.print("[yellow]No version history available for this resume yet. It saves automatically as you make changes.[/yellow]")
+        console.print("[yellow]No version history available for this resume yet.[/yellow]")
         questionary.press_any_key_to_continue().ask()
         return data
 
     while True:
-        # Show most recent first
-        choices = [f"{i+1}. {h['timestamp']}" for i, h in enumerate(reversed(history))] + ['Back']
+        reversed_hist = list(reversed(history))
+        choices = [
+            f"v{h.get('version_num', '?')} ({h.get('label', 'Snapshot')}) — {h['timestamp']}"
+            for h in reversed_hist
+        ] + ['Back']
         choice = questionary.select("Select a past version:", choices=choices, use_shortcuts=True).ask()
-        
         if choice == 'Back' or not choice:
             break
-            
-        # Convert choice back to original history index
-        rev_idx = int(choice.split('.')[0]) - 1
-        idx = len(history) - 1 - rev_idx
-        selected_version = history[idx]
-        
+
+        selected_version = reversed_hist[choices.index(choice)]
         action = questionary.select(
-            "What would you like to do with this version?", 
-            choices=["Generate PDF/Docx to preview", "Revert to this version", "Back"], 
-            use_shortcuts=True
+            "What would you like to do with this version?",
+            choices=["Export DOCX/PDF/JSON", "Revert to this version", "Back"],
+            use_shortcuts=True,
         ).ask()
-        
-        if action == "Generate PDF/Docx to preview":
-            temp_data = selected_version['state']
-            temp_filepath = filepath.with_name(f"{filepath.stem}_history_{idx+1}.json")
-            generate_resume(temp_data, temp_filepath)
+
+        if action == "Export DOCX/PDF/JSON":
+            stem = f"{record['slug']}_history_v{selected_version['version_num']}"
+            generate_resume(selected_version['state'], out_stem=stem)
         elif action == "Revert to this version":
-            if questionary.confirm("Are you sure? Your current state will be saved as a new history entry.").ask():
-                new_data = selected_version['state']
-                new_data['_history'] = history # Preserve the history list
-                console.print("[green]Reverted to past version![/green]")
-                return new_data
+            if questionary.confirm("Are you sure? Your current state will be archived as a snapshot.").ask():
+                reverted = revert_version_db(resume_id, selected_version['id'])
+                if reverted:
+                    console.print(f"[green]Reverted to Version #{selected_version['version_num']}![/green]")
+                    return reverted['data']
 
     return data
 
-def edit_resume_menu(filepath):
-    data = load_resume(filepath)
+
+def edit_resume_menu(resume_id):
+    record = get_resume_db(resume_id)
+    if not record:
+        console.print("[red]Resume not found in database.[/red]")
+        return
+    data = record['data']
     while True:
-        save_resume(filepath, data)
-        console.print(f'\n[bold cyan]--- Editing {filepath.name} ---[/bold cyan]')
-        choice = questionary.select('What would you like to do?', choices=['Edit Contact Info', 'Manage Sections & Items', 'Preview in Terminal', 'Generate/Preview Resume', 'Version History', 'Save & Return to Main Menu'], use_shortcuts=True).ask()
+        updated = update_resume_db(resume_id, data, save_mode="snapshot")
+        if updated:
+            data = updated['data']
+        console.print(f"\n[bold cyan]--- Editing {data.get('name', 'Resume')} ---[/bold cyan]")
+        choice = questionary.select(
+            'What would you like to do?',
+            choices=['Edit Contact Info', 'Manage Sections & Items', 'Preview in Terminal', 'Generate/Export Resume', 'Version History', 'Save & Return to Main Menu'],
+            use_shortcuts=True,
+        ).ask()
         if choice == 'Edit Contact Info':
             data = edit_contact_info(data)
         elif choice == 'Manage Sections & Items':
             data = manage_sections(data)
         elif choice == 'Preview in Terminal':
             preview_resume_terminal(data)
-        elif choice == 'Generate/Preview Resume':
-            generate_resume(data, filepath)
+        elif choice == 'Generate/Export Resume':
+            generate_resume(data, out_stem=make_slug(data.get('name') or 'resume'))
         elif choice == 'Version History':
-            data = version_history_menu(data, filepath)
+            data = version_history_menu(resume_id)
         else:
-            save_resume(filepath, data)
+            update_resume_db(resume_id, data, save_mode="snapshot")
             break
+
 
 def main():
     init_app()
@@ -435,13 +488,13 @@ def main():
     while True:
         choice = questionary.select('Main Menu:', choices=['Select/Edit Resume', 'Create New Resume', 'Delete a Resume', 'Options', 'Help / Examples', 'Exit'], use_shortcuts=True).ask()
         if choice == 'Select/Edit Resume':
-            filepath = select_resume()
-            if filepath:
-                edit_resume_menu(filepath)
+            resume_id = select_resume()
+            if resume_id:
+                edit_resume_menu(resume_id)
         elif choice == 'Create New Resume':
-            filepath = create_resume()
-            if filepath:
-                edit_resume_menu(filepath)
+            resume_id = create_resume()
+            if resume_id:
+                edit_resume_menu(resume_id)
         elif choice == 'Delete a Resume':
             delete_resume()
         elif choice == 'Options':
@@ -451,5 +504,7 @@ def main():
         else:
             console.print('[bold blue]Goodbye![/bold blue]')
             break
+
+
 if __name__ == '__main__':
     main()

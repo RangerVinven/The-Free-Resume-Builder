@@ -29,7 +29,7 @@
     aiTarget: null, // { secIdx, itemIdx, detailIdx }
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
     aiLoading: false,
-    aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasOpenAIKey: false },
+    aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
     editorMode: 'manual', // 'manual' | 'ai'
     fullAiMessages: [], // { role: 'user'|'assistant', content: string, changes?: string[] }
     fullAiLoading: false,
@@ -174,6 +174,7 @@
     btnFullAiUndo: document.getElementById('btnFullAiUndo'),
     btnFullAiReset: document.getElementById('btnFullAiReset'),
     fullAiNoKeyBanner: document.getElementById('fullAiNoKeyBanner'),
+    fullAiNoKeyText: document.getElementById('fullAiNoKeyText'),
     btnFullAiOpenSettings: document.getElementById('btnFullAiOpenSettings'),
     fullAiMessages: document.getElementById('fullAiMessages'),
     fullAiQuickChips: document.getElementById('fullAiQuickChips'),
@@ -189,6 +190,7 @@
     btnAiClose: document.getElementById('btnAiClose'),
     aiContextBar: document.getElementById('aiContextBar'),
     aiKeyMissingBanner: document.getElementById('aiKeyMissingBanner'),
+    aiNoKeyText: document.getElementById('aiNoKeyText'),
     btnAiOpenSettings: document.getElementById('btnAiOpenSettings'),
     aiChatThread: document.getElementById('aiChatThread'),
     aiQuickChips: document.getElementById('aiQuickChips'),
@@ -1797,24 +1799,58 @@
     return { sec, item, detail };
   }
 
+  const PROVIDER_DEFAULTS = {
+    OpenAI: { model: 'gpt-4o-mini', listId: 'openaiModelSuggestions' },
+    Gemini: { model: 'gemini-2.5-flash', listId: 'geminiModelSuggestions' },
+    Claude: { model: 'claude-sonnet-4-5', listId: 'claudeModelSuggestions' },
+  };
+
   async function refreshAiSettingsStatus() {
     try {
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
+      const provider = PROVIDER_DEFAULTS[ai.provider] ? ai.provider : 'OpenAI';
+      const defaultModel = PROVIDER_DEFAULTS[provider].model;
       state.aiConfig = {
-        provider: ai.provider || 'OpenAI',
-        model: ai.model || 'gpt-4o-mini',
-        hasOpenAIKey: Boolean((keys.OpenAI || '').trim()),
+        provider,
+        model: (ai.model || '').trim() || defaultModel,
+        hasActiveKey: Boolean((keys[provider] || '').trim()),
       };
     } catch {
       // Leave existing config on transient failure
     }
-    const activeModel = state.aiConfig.model || 'gpt-4o-mini';
-    el.aiModelBadge.textContent = activeModel;
-    el.aiKeyMissingBanner.hidden = state.aiConfig.hasOpenAIKey;
-    el.fullAiModelBadge.textContent = activeModel;
-    el.fullAiNoKeyBanner.hidden = state.aiConfig.hasOpenAIKey;
+    const provider = state.aiConfig.provider || 'OpenAI';
+    const activeModel = state.aiConfig.model || PROVIDER_DEFAULTS[provider]?.model || 'gpt-4o-mini';
+    const hasKey = Boolean(state.aiConfig.hasActiveKey);
+
+    el.aiModelBadge.textContent = `${provider}: ${activeModel}`;
+    el.aiKeyMissingBanner.hidden = hasKey;
+    el.aiNoKeyText.textContent = `No ${provider} API key is configured. Add your key in Settings to use the Writing Assistant.`;
+
+    el.fullAiModelBadge.textContent = `${provider}: ${activeModel}`;
+    el.fullAiNoKeyBanner.hidden = hasKey;
+    el.fullAiNoKeyText.textContent = `No ${provider} API key is configured. Add your key in Settings to use the AI Builder.`;
+  }
+
+  function syncSettingsProviderFields(resetModelIfForeign = false) {
+    const provider = el.aiProviderSelect.value || 'OpenAI';
+    const meta = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.OpenAI;
+    el.aiModelInput.setAttribute('list', meta.listId);
+    el.aiModelInput.placeholder = meta.model;
+    if (resetModelIfForeign) {
+      const cur = el.aiModelInput.value.trim();
+      const knownDefaults = Object.values(PROVIDER_DEFAULTS).map((d) => d.model);
+      const isForeignDefault = knownDefaults.includes(cur) && cur !== meta.model;
+      const matchesOtherPrefix = (
+        (provider !== 'OpenAI' && /^(gpt-|o[134]-)/i.test(cur))
+        || (provider !== 'Gemini' && /^gemini-/i.test(cur))
+        || (provider !== 'Claude' && /^claude-/i.test(cur))
+      );
+      if (!cur || isForeignDefault || matchesOtherPrefix) {
+        el.aiModelInput.value = meta.model;
+      }
+    }
   }
 
   function renderAiContextBar() {
@@ -2288,7 +2324,8 @@
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
       el.aiProviderSelect.value = ai.provider || 'OpenAI';
-      el.aiModelInput.value = ai.model || 'gpt-4o-mini';
+      el.aiModelInput.value = ai.model || (PROVIDER_DEFAULTS[el.aiProviderSelect.value]?.model || 'gpt-4o-mini');
+      syncSettingsProviderFields(false);
       el.keyOpenAI.value = keys.OpenAI || '';
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
@@ -2500,6 +2537,7 @@
     });
 
     // Settings Modal
+    el.aiProviderSelect.addEventListener('change', () => syncSettingsProviderFields(true));
     el.formSettings.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {

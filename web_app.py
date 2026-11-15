@@ -4,6 +4,7 @@ import re
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from io import BytesIO
 from pathlib import Path
@@ -479,56 +480,20 @@ def build_full_resume_system_prompt(resume_data: dict) -> str:
     )
 
 
-def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
-    """Call OpenAI Chat Completions API with JSON response_format."""
-    api_messages = [{"role": "system", "content": system_prompt}]
-    for msg in messages:
-        role = msg.get("role")
-        content = (msg.get("content") or "").strip()
-        if role in ("user", "assistant") and content:
-            api_messages.append({"role": role, "content": content})
-
-    body = {
-        "model": model or "gpt-4o-mini",
-        "messages": api_messages,
-        "response_format": {"type": "json_object"},
-    }
-    # Reasoning o-series models may reject custom temperature
-    if not (model or "").startswith(("o1", "o3", "o4")):
-        body["temperature"] = 0.4
-
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
+def _parse_ai_json_response(content_str: str) -> dict:
+    """Parse structured JSON output from any AI provider (stripping optional markdown fences)."""
+    cleaned = (content_str or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
 
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        err_text = e.read().decode("utf-8", errors="replace")
-        try:
-            err_msg = json.loads(err_text).get("error", {}).get("message") or err_text
-        except Exception:
-            err_msg = err_text
-        if e.code == 401:
-            raise ValueError("Invalid OpenAI API key. Please check your key in Settings.")
-        if e.code == 429:
-            raise ValueError(f"OpenAI rate limit or quota exceeded: {err_msg}")
-        raise ValueError(f"OpenAI API error ({e.code}): {err_msg}")
-    except urllib.error.URLError as e:
-        raise ValueError(f"Network error contacting OpenAI: {e.reason}")
-
-    content_str = raw["choices"][0]["message"]["content"]
-    try:
-        parsed = json.loads(content_str)
+        parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        return {"reply": content_str, "suggestions": []}
+        return {"reply": content_str, "suggestions": [], "updated_resume": None, "changes_summary": []}
+
+    if not isinstance(parsed, dict):
+        return {"reply": content_str, "suggestions": [], "updated_resume": None, "changes_summary": []}
 
     reply = parsed.get("reply") or ""
     suggestions = parsed.get("suggestions") or []
@@ -540,6 +505,7 @@ def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: lis
                     "label": (s.get("label") or "Option").strip(),
                     "text": s["text"].strip(),
                 })
+
     changes_summary = []
     raw_changes = parsed.get("changes_summary")
     if isinstance(raw_changes, list):
@@ -557,6 +523,139 @@ def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: lis
     }
 
 
+def _post_json_api(url: str, headers: dict, body: dict, provider_name: str) -> dict:
+    """Send a JSON POST request to an AI provider API and normalize error messages."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", **headers},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_text = e.read().decode("utf-8", errors="replace")
+        try:
+            err_json = json.loads(err_text)
+            err_msg = (
+                (err_json.get("error") or {}).get("message")
+                if isinstance(err_json.get("error"), dict)
+                else err_json.get("message")
+            ) or err_text
+        except Exception:
+            err_msg = err_text
+        if e.code in (401, 403):
+            raise ValueError(f"Invalid or unauthorized {provider_name} API key. Please check Settings.")
+        if e.code == 429:
+            raise ValueError(f"{provider_name} rate limit or quota exceeded: {err_msg}")
+        raise ValueError(f"{provider_name} API error ({e.code}): {err_msg}")
+    except urllib.error.URLError as e:
+        raise ValueError(f"Network error contacting {provider_name}: {e.reason}")
+
+
+def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
+    """Call OpenAI Chat Completions API with JSON response_format."""
+    api_messages = [{"role": "system", "content": system_prompt}]
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            api_messages.append({"role": role, "content": content})
+
+    body: dict = {
+        "model": model or "gpt-4o-mini",
+        "messages": api_messages,
+        "response_format": {"type": "json_object"},
+    }
+    if not (model or "").startswith(("o1", "o3", "o4")):
+        body["temperature"] = 0.4
+
+    raw = _post_json_api(
+        "https://api.openai.com/v1/chat/completions",
+        {"Authorization": f"Bearer {api_key}"},
+        body,
+        "OpenAI",
+    )
+    content_str = raw["choices"][0]["message"]["content"]
+    return _parse_ai_json_response(content_str)
+
+
+def call_gemini_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
+    """Call Google Gemini generateContent REST API with JSON responseMimeType."""
+    target_model = model or "gemini-2.5-flash"
+    contents = []
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            contents.append({
+                "role": "model" if role == "assistant" else "user",
+                "parts": [{"text": content}],
+            })
+
+    body = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.4,
+            "responseMimeType": "application/json",
+        },
+    }
+    encoded_model = urllib.parse.quote(target_model, safe="-.")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{encoded_model}:generateContent"
+    raw = _post_json_api(
+        url,
+        {"x-goog-api-key": api_key},
+        body,
+        "Gemini",
+    )
+    candidates = raw.get("candidates") or []
+    parts = (candidates[0].get("content") or {}).get("parts") or [] if candidates else []
+    content_str = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    return _parse_ai_json_response(content_str)
+
+
+def call_claude_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
+    """Call Anthropic Claude Messages API requesting strict JSON output."""
+    target_model = model or "claude-sonnet-4-5"
+    api_messages = []
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            api_messages.append({"role": role, "content": content})
+
+    body = {
+        "model": target_model,
+        "max_tokens": 4096,
+        "temperature": 0.4,
+        "system": system_prompt + "\n\nRespond with a valid JSON object only (no markdown code fences).",
+        "messages": api_messages,
+    }
+    raw = _post_json_api(
+        "https://api.anthropic.com/v1/messages",
+        {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        body,
+        "Claude",
+    )
+    blocks = raw.get("content") or []
+    content_str = "".join(
+        b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+    )
+    return _parse_ai_json_response(content_str)
+
+
+AI_PROVIDERS = {
+    "OpenAI": ("gpt-4o-mini", call_openai_chat),
+    "Gemini": ("gemini-2.5-flash", call_gemini_chat),
+    "Claude": ("claude-sonnet-4-5", call_claude_chat),
+}
+
+
 @app.route("/api/ai/assist", methods=["POST"])
 def ai_assist_api():
     payload = request.get_json(silent=True) or {}
@@ -570,15 +669,17 @@ def ai_assist_api():
     settings = load_settings()
     ai_cfg = settings.get("ai", {})
     provider = ai_cfg.get("provider", "OpenAI")
-    model = ai_cfg.get("model", "gpt-4o-mini")
     api_keys = settings.get("api_keys", {})
 
-    if provider != "OpenAI":
-        return jsonify({"error": f"Provider '{provider}' is not enabled yet. Switch to OpenAI in Settings."}), 400
+    if provider not in AI_PROVIDERS:
+        supported = ", ".join(AI_PROVIDERS.keys())
+        return jsonify({"error": f"Unsupported provider '{provider}'. Choose one of: {supported}."}), 400
 
-    api_key = (api_keys.get("OpenAI") or "").strip()
+    default_model, caller_fn = AI_PROVIDERS[provider]
+    model = (ai_cfg.get("model") or "").strip() or default_model
+    api_key = (api_keys.get(provider) or "").strip()
     if not api_key:
-        return jsonify({"error": "No OpenAI API key configured. Open Settings to add your key."}), 400
+        return jsonify({"error": f"No {provider} API key configured. Open Settings to add your key."}), 400
 
     if mode == "full_resume":
         existing_resume = payload.get("resume_data") or {}
@@ -591,7 +692,7 @@ def ai_assist_api():
         system_prompt = build_bullet_system_prompt(context)
 
     try:
-        result = call_openai_chat(api_key, model, system_prompt, messages)
+        result = caller_fn(api_key, model, system_prompt, messages)
         response_body = {
             "reply": result["reply"],
             "suggestions": result["suggestions"],
