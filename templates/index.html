@@ -443,6 +443,52 @@
               <iframe id="pdfFrame" class="pdf-frame" title="Rendered Resume PDF"></iframe>
             </div>
           </div>
+
+          <!-- Docked Writing Assistant Drawer (overlays preview pane when active) -->
+          <aside id="aiDrawer" class="ai-drawer" hidden aria-label="Writing Assistant">
+            <div class="ai-drawer-header">
+              <div class="ai-drawer-title-group">
+                <i data-lucide="pen-line" class="card-icon"></i>
+                <div>
+                  <h3 class="ai-drawer-title">Writing Assistant</h3>
+                  <span id="aiTargetLabel" class="ai-target-subtitle">Drafting bullet</span>
+                </div>
+              </div>
+              <div class="ai-drawer-header-actions">
+                <span id="aiModelBadge" class="mono-code">OpenAI</span>
+                <button type="button" id="btnAiReset" class="btn btn-ghost btn-xs" title="Reset conversation" aria-label="Reset conversation">
+                  <i data-lucide="rotate-ccw"></i>
+                </button>
+                <button type="button" id="btnAiClose" class="btn btn-ghost btn-xs" title="Close assistant" aria-label="Close assistant">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <div id="aiContextBar" class="ai-context-bar"></div>
+
+            <div id="aiKeyMissingBanner" class="ai-key-banner" hidden>
+              <div class="ai-key-banner-text">
+                <i data-lucide="alert-circle" class="ai-banner-icon"></i>
+                <span>No OpenAI API key is configured. Add your key in Settings to use the Writing Assistant.</span>
+              </div>
+              <button type="button" id="btnAiOpenSettings" class="btn btn-secondary btn-xs">Open Settings</button>
+            </div>
+
+            <div id="aiChatThread" class="ai-chat-thread" aria-live="polite"></div>
+
+            <div class="ai-drawer-footer">
+              <div id="aiQuickChips" class="ai-quick-chips"></div>
+              <form id="aiComposerForm" class="ai-composer-form">
+                <label for="aiInput" class="sr-only">Describe your work or answer the assistant</label>
+                <textarea id="aiInput" class="textarea-control ai-input" rows="2" placeholder="Describe what you did, tools used, or answer the questions above..."></textarea>
+                <button type="submit" id="btnAiSend" class="btn btn-primary btn-sm ai-send-btn">
+                  <i data-lucide="send"></i>
+                  <span>Send</span>
+                </button>
+              </form>
+            </div>
+          </aside>
         </section>
       </main>
     </div>
@@ -540,23 +586,42 @@
         </button>
       </div>
       <form id="formSettings">
-        <div class="modal-body">
-          <p class="modal-description">Configure optional provider API keys stored locally in <code class="mono-code">settings.json</code>.</p>
+        <div class="modal-body modal-scroll">
+          <p class="modal-description">Configure your active model and API keys stored locally in <code class="mono-code">settings.json</code>.</p>
           <div class="form-stack">
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label for="aiProviderSelect">Active Provider</label>
+                <select id="aiProviderSelect" class="select-control">
+                  <option value="OpenAI">OpenAI</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="aiModelInput">Model</label>
+                <input id="aiModelInput" type="text" class="input-control" list="openaiModelSuggestions" placeholder="gpt-4o-mini" value="gpt-4o-mini" />
+                <datalist id="openaiModelSuggestions">
+                  <option value="gpt-4o-mini"></option>
+                  <option value="gpt-4o"></option>
+                  <option value="gpt-4.1-mini"></option>
+                  <option value="gpt-4.1"></option>
+                  <option value="o4-mini"></option>
+                </datalist>
+              </div>
+            </div>
             <div class="form-field">
               <label for="keyOpenAI">OpenAI API Key</label>
               <input id="keyOpenAI" type="password" class="input-control" placeholder="sk-..." autocomplete="off" />
             </div>
             <div class="form-field">
-              <label for="keyGemini">Gemini API Key</label>
+              <label for="keyGemini">Gemini API Key <span class="label-optional">(saved for future use)</span></label>
               <input id="keyGemini" type="password" class="input-control" placeholder="AIza..." autocomplete="off" />
             </div>
             <div class="form-field">
-              <label for="keyClaude">Claude API Key</label>
+              <label for="keyClaude">Claude API Key <span class="label-optional">(saved for future use)</span></label>
               <input id="keyClaude" type="password" class="input-control" placeholder="sk-ant-..." autocomplete="off" />
             </div>
             <div class="form-field">
-              <label for="keyOther">Other API Key</label>
+              <label for="keyOther">Other API Key <span class="label-optional">(saved for future use)</span></label>
               <input id="keyOther" type="password" class="input-control" placeholder="Custom key..." autocomplete="off" />
             </div>
           </div>

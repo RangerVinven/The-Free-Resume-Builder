@@ -17,6 +17,11 @@
     zoom: 0.85,
     renameSectionIdx: null,
     deleteTargetFilename: null,
+    aiOpen: false,
+    aiTarget: null, // { secIdx, itemIdx, detailIdx }
+    aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
+    aiLoading: false,
+    aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasOpenAIKey: false },
   };
 
   // DOM Elements
@@ -132,10 +137,27 @@
 
     modalSettings: document.getElementById('modalSettings'),
     formSettings: document.getElementById('formSettings'),
+    aiProviderSelect: document.getElementById('aiProviderSelect'),
+    aiModelInput: document.getElementById('aiModelInput'),
     keyOpenAI: document.getElementById('keyOpenAI'),
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
+
+    // Writing Assistant Drawer
+    aiDrawer: document.getElementById('aiDrawer'),
+    aiTargetLabel: document.getElementById('aiTargetLabel'),
+    aiModelBadge: document.getElementById('aiModelBadge'),
+    btnAiReset: document.getElementById('btnAiReset'),
+    btnAiClose: document.getElementById('btnAiClose'),
+    aiContextBar: document.getElementById('aiContextBar'),
+    aiKeyMissingBanner: document.getElementById('aiKeyMissingBanner'),
+    btnAiOpenSettings: document.getElementById('btnAiOpenSettings'),
+    aiChatThread: document.getElementById('aiChatThread'),
+    aiQuickChips: document.getElementById('aiQuickChips'),
+    aiComposerForm: document.getElementById('aiComposerForm'),
+    aiInput: document.getElementById('aiInput'),
+    btnAiSend: document.getElementById('btnAiSend'),
 
     toastContainer: document.getElementById('toastContainer'),
   };
@@ -230,6 +252,9 @@
     state.data = null;
     state.isNewResume = false;
     state.isDirty = false;
+    state.aiOpen = false;
+    state.aiTarget = null;
+    el.aiDrawer.hidden = true;
 
     el.directoryView.hidden = false;
     el.wizardView.hidden = true;
@@ -501,6 +526,9 @@
     if (state.isNewResume && targetStep > 1) {
       const created = await createDraftResumeOnServer();
       if (!created) return;
+    }
+    if (targetStep !== 3 && state.aiOpen) {
+      closeAiDrawer();
     }
     state.wizardStep = targetStep;
     renderWizardStep();
@@ -1041,6 +1069,24 @@
       detailsTitle.className = 'details-title';
       detailsTitle.textContent = 'Bullets & Prose';
 
+      const detailsHeaderActions = document.createElement('div');
+      detailsHeaderActions.className = 'details-header-actions';
+
+      const draftAiBtn = document.createElement('button');
+      draftAiBtn.type = 'button';
+      draftAiBtn.className = 'btn btn-secondary btn-xs';
+      draftAiBtn.title = 'Open Writing Assistant to draft a new bullet';
+      draftAiBtn.innerHTML = '<i data-lucide="pen-line"></i><span>Draft with AI</span>';
+      draftAiBtn.addEventListener('click', () => {
+        if (!Array.isArray(item.details)) item.details = [];
+        item.details.push({ is_bullet: true, text: '' });
+        const newDetailIdx = item.details.length - 1;
+        setDirty(true);
+        openAiDrawer({ secIdx: state.activeSectionIdx, itemIdx, detailIdx: newDetailIdx });
+        renderActiveSectionCard(sec, state.activeSectionIdx);
+        renderPreview();
+      });
+
       const addDetailBtn = document.createElement('button');
       addDetailBtn.type = 'button';
       addDetailBtn.className = 'btn btn-secondary btn-xs';
@@ -1053,13 +1099,21 @@
         renderPreview();
       });
 
-      detailsHeader.append(detailsTitle, addDetailBtn);
+      detailsHeaderActions.append(draftAiBtn, addDetailBtn);
+      detailsHeader.append(detailsTitle, detailsHeaderActions);
       detailsBlock.appendChild(detailsHeader);
 
       const details = item.details || [];
       details.forEach((detail, dIdx) => {
+        const isTargeted = Boolean(
+          state.aiOpen &&
+          state.aiTarget &&
+          state.aiTarget.secIdx === state.activeSectionIdx &&
+          state.aiTarget.itemIdx === itemIdx &&
+          state.aiTarget.detailIdx === dIdx
+        );
         const row = document.createElement('div');
-        row.className = 'detail-row';
+        row.className = `detail-row${isTargeted ? ' detail-row-active' : ''}`;
 
         const toggle = document.createElement('div');
         toggle.className = 'style-toggle';
@@ -1100,25 +1154,50 @@
           autoResizeTextarea(textarea);
           setDirty(true);
           renderPreview();
+          if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
+            renderAiContextBar();
+          }
+        });
+
+        const assistBtn = document.createElement('button');
+        assistBtn.type = 'button';
+        assistBtn.className = 'btn btn-secondary btn-xs';
+        assistBtn.title = 'Open Writing Assistant for this detail';
+        assistBtn.innerHTML = '<i data-lucide="pen-line"></i><span>Assist</span>';
+        assistBtn.addEventListener('click', () => {
+          openAiDrawer({ secIdx: state.activeSectionIdx, itemIdx, detailIdx: dIdx });
+          renderActiveSectionCard(sec, state.activeSectionIdx);
         });
 
         const dActions = document.createElement('div');
         dActions.className = 'detail-actions';
         dActions.append(
+          assistBtn,
           makeIconButton('arrow-up', 'Move detail up', dIdx === 0, () => {
             swapItems(details, dIdx, dIdx - 1);
+            if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx) {
+              if (state.aiTarget.detailIdx === dIdx) state.aiTarget.detailIdx = dIdx - 1;
+              else if (state.aiTarget.detailIdx === dIdx - 1) state.aiTarget.detailIdx = dIdx;
+            }
             setDirty(true);
             renderActiveSectionCard(sec, state.activeSectionIdx);
             renderPreview();
           }),
           makeIconButton('arrow-down', 'Move detail down', dIdx === details.length - 1, () => {
             swapItems(details, dIdx, dIdx + 1);
+            if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx) {
+              if (state.aiTarget.detailIdx === dIdx) state.aiTarget.detailIdx = dIdx + 1;
+              else if (state.aiTarget.detailIdx === dIdx + 1) state.aiTarget.detailIdx = dIdx;
+            }
             setDirty(true);
             renderActiveSectionCard(sec, state.activeSectionIdx);
             renderPreview();
           }),
           makeIconButton('x', 'Delete detail', false, () => {
             details.splice(dIdx, 1);
+            if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
+              closeAiDrawer();
+            }
             setDirty(true);
             renderActiveSectionCard(sec, state.activeSectionIdx);
             renderPreview();
@@ -1479,10 +1558,306 @@
     openModal(el.modalHistory);
   }
 
+  // =========================================================
+  // DOCKED WRITING ASSISTANT DRAWER
+  // =========================================================
+  function getAiTargetObjects() {
+    if (!state.data || !state.aiTarget) return null;
+    const sec = state.data.sections?.[state.aiTarget.secIdx];
+    const item = sec?.items?.[state.aiTarget.itemIdx];
+    const detail = item?.details?.[state.aiTarget.detailIdx];
+    if (!sec || !item || !detail) return null;
+    return { sec, item, detail };
+  }
+
+  async function refreshAiSettingsStatus() {
+    try {
+      const { settings } = await fetchJson('/api/settings');
+      const keys = settings.api_keys || {};
+      const ai = settings.ai || {};
+      state.aiConfig = {
+        provider: ai.provider || 'OpenAI',
+        model: ai.model || 'gpt-4o-mini',
+        hasOpenAIKey: Boolean((keys.OpenAI || '').trim()),
+      };
+    } catch {
+      // Leave existing config on transient failure
+    }
+    el.aiModelBadge.textContent = state.aiConfig.model || 'gpt-4o-mini';
+    el.aiKeyMissingBanner.hidden = state.aiConfig.hasOpenAIKey;
+  }
+
+  function renderAiContextBar() {
+    const objs = getAiTargetObjects();
+    if (!objs) return;
+    const { sec, item, detail } = objs;
+    const kind = detail.is_bullet ? 'Bullet' : 'Prose';
+    el.aiTargetLabel.textContent = `${kind} #${state.aiTarget.detailIdx + 1}`;
+
+    const headerBits = [item.role, item.company, item.subtitle].filter(Boolean);
+    const entryText = headerBits.length > 0 ? headerBits.join(' — ') : 'General Entry';
+    const currentDraft = (detail.text || '').trim();
+
+    el.aiContextBar.innerHTML = `
+      <div class="ai-context-entry">${escapeHtml((sec.title || '').toUpperCase())} &bull; ${escapeHtml(entryText)}</div>
+      ${currentDraft ? `<div class="ai-context-draft">Current draft: ${escapeHtml(currentDraft)}</div>` : '<div class="ai-context-draft">Empty box &mdash; ready to draft from your notes</div>'}
+    `;
+  }
+
+  function renderAiQuickChips() {
+    const objs = getAiTargetObjects();
+    el.aiQuickChips.innerHTML = '';
+    if (!objs || state.aiLoading) return;
+
+    const hasDraft = Boolean((objs.detail.text || '').trim());
+    const chips = hasDraft
+      ? [
+          { label: 'Improve & suggest options', prompt: 'Review my current draft and suggest 2-3 stronger variations.' },
+          { label: 'Ask questions to strengthen', prompt: 'What specific details or metrics would make this bullet stronger? Ask me 2-3 quick questions.' },
+          { label: 'Make more concise', prompt: 'Give me shorter, punchier versions of my current draft.' },
+        ]
+      : [
+          { label: 'Ask me questions to draft this', prompt: 'Ask me 2-3 short questions about what I worked on so we can write this bullet together.' },
+          { label: 'Show 3 role examples', prompt: 'Show me 3 realistic example bullets for this role so I can pick a style and customize it.' },
+        ];
+
+    chips.forEach((chip) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ai-quick-chip';
+      btn.textContent = chip.label;
+      btn.disabled = !state.aiConfig.hasOpenAIKey || state.aiLoading;
+      btn.addEventListener('click', () => sendAiMessage(chip.prompt));
+      el.aiQuickChips.appendChild(btn);
+    });
+  }
+
+  function applyAiSuggestion(text, mode) {
+    const objs = getAiTargetObjects();
+    if (!objs) return;
+    const { sec, item, detail } = objs;
+
+    if (mode === 'replace') {
+      detail.text = text;
+      setDirty(true);
+      renderActiveSectionCard(sec, state.aiTarget.secIdx);
+      renderPreview();
+      renderAiContextBar();
+      showToast('Applied suggestion to active bullet.', 'success');
+    } else if (mode === 'add') {
+      item.details.splice(state.aiTarget.detailIdx + 1, 0, {
+        is_bullet: detail.is_bullet,
+        text,
+      });
+      state.aiTarget.detailIdx += 1;
+      setDirty(true);
+      renderActiveSectionCard(sec, state.aiTarget.secIdx);
+      renderPreview();
+      renderAiContextBar();
+      showToast('Added suggestion as a new detail row.', 'success');
+    }
+  }
+
+  function renderAiThread() {
+    el.aiChatThread.innerHTML = '';
+
+    if (state.aiMessages.length === 0) {
+      const welcome = document.createElement('div');
+      welcome.className = 'ai-msg ai-msg-assistant';
+      welcome.innerHTML = `
+        <div class="ai-msg-bubble">Describe roughly what you did for this role (tools used, problems solved, or outcomes), or click one of the prompts below to be guided step by step.</div>
+      `;
+      el.aiChatThread.appendChild(welcome);
+    }
+
+    state.aiMessages.forEach((msg) => {
+      const wrap = document.createElement('div');
+      wrap.className = `ai-msg ai-msg-${msg.role}`;
+
+      if (msg.content) {
+        const bubble = document.createElement('div');
+        bubble.className = 'ai-msg-bubble';
+        bubble.textContent = msg.content;
+        wrap.appendChild(bubble);
+      }
+
+      if (msg.role === 'assistant' && Array.isArray(msg.suggestions) && msg.suggestions.length > 0) {
+        const sugList = document.createElement('div');
+        sugList.className = 'ai-suggestions-list';
+
+        msg.suggestions.forEach((sug) => {
+          const card = document.createElement('div');
+          card.className = 'ai-suggestion-card';
+
+          const top = document.createElement('div');
+          top.className = 'ai-suggestion-top';
+          top.innerHTML = `<span class="ai-suggestion-label">${escapeHtml(sug.label || 'Option')}</span>`;
+
+          const textEl = document.createElement('p');
+          textEl.className = 'ai-suggestion-text';
+          textEl.textContent = sug.text;
+
+          const actions = document.createElement('div');
+          actions.className = 'ai-suggestion-actions';
+
+          const btnCopy = document.createElement('button');
+          btnCopy.type = 'button';
+          btnCopy.className = 'btn btn-ghost btn-xs';
+          btnCopy.textContent = 'Copy';
+          btnCopy.addEventListener('click', () => {
+            navigator.clipboard?.writeText(sug.text);
+            showToast('Copied to clipboard.', 'success');
+          });
+
+          const btnAdd = document.createElement('button');
+          btnAdd.type = 'button';
+          btnAdd.className = 'btn btn-secondary btn-xs';
+          btnAdd.textContent = 'Add Below';
+          btnAdd.addEventListener('click', () => applyAiSuggestion(sug.text, 'add'));
+
+          const btnReplace = document.createElement('button');
+          btnReplace.type = 'button';
+          btnReplace.className = 'btn btn-primary btn-xs';
+          btnReplace.textContent = 'Replace Bullet';
+          btnReplace.addEventListener('click', () => applyAiSuggestion(sug.text, 'replace'));
+
+          actions.append(btnCopy, btnAdd, btnReplace);
+          card.append(top, textEl, actions);
+          sugList.appendChild(card);
+        });
+
+        wrap.appendChild(sugList);
+      }
+
+      el.aiChatThread.appendChild(wrap);
+    });
+
+    if (state.aiLoading) {
+      const loading = document.createElement('div');
+      loading.className = 'ai-msg-loading';
+      loading.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div><span>Drafting response...</span>';
+      el.aiChatThread.appendChild(loading);
+    }
+
+    el.aiChatThread.scrollTop = el.aiChatThread.scrollHeight;
+    renderAiQuickChips();
+  }
+
+  async function sendAiMessage(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed || state.aiLoading) return;
+
+    const objs = getAiTargetObjects();
+    if (!objs) return;
+
+    if (!state.aiConfig.hasOpenAIKey) {
+      el.aiKeyMissingBanner.hidden = false;
+      showToast('Configure your OpenAI API key in Settings first.', 'error');
+      return;
+    }
+
+    state.aiMessages.push({ role: 'user', content: trimmed });
+    state.aiLoading = true;
+    el.btnAiSend.disabled = true;
+    el.aiInput.value = '';
+    autoResizeTextarea(el.aiInput);
+    renderAiThread();
+
+    const { sec, item, detail } = objs;
+    const siblingDetails = (item.details || [])
+      .filter((_, idx) => idx !== state.aiTarget.detailIdx)
+      .map((d) => d.text || '')
+      .filter(Boolean);
+
+    const apiMessages = state.aiMessages.map((m) => ({
+      role: m.role,
+      content: m.content || (m.suggestions?.length ? m.suggestions.map((s) => `${s.label}: ${s.text}`).join('\n') : ''),
+    }));
+
+    try {
+      const res = await fetchJson('/api/ai/assist', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'bullet',
+          context: {
+            section_title: sec.title || '',
+            role: item.role || '',
+            company: item.company || '',
+            location: item.location || '',
+            date: item.date || '',
+            subtitle: item.subtitle || '',
+            is_bullet: Boolean(detail.is_bullet),
+            current_text: detail.text || '',
+            sibling_details: siblingDetails,
+          },
+          messages: apiMessages,
+        }),
+      });
+      state.aiMessages.push({
+        role: 'assistant',
+        content: res.reply || '',
+        suggestions: res.suggestions || [],
+      });
+    } catch (err) {
+      state.aiMessages.push({
+        role: 'assistant',
+        content: `Error: ${err.message}`,
+        suggestions: [],
+      });
+    } finally {
+      state.aiLoading = false;
+      el.btnAiSend.disabled = false;
+      renderAiThread();
+      el.aiInput.focus();
+    }
+  }
+
+  async function openAiDrawer(target) {
+    const isSameTarget = Boolean(
+      state.aiTarget &&
+      state.aiTarget.secIdx === target.secIdx &&
+      state.aiTarget.itemIdx === target.itemIdx &&
+      state.aiTarget.detailIdx === target.detailIdx
+    );
+
+    if (!isSameTarget) {
+      state.aiMessages = [];
+    }
+    state.aiTarget = target;
+    state.aiOpen = true;
+    el.aiDrawer.hidden = false;
+
+    if (window.innerWidth < 1024) {
+      el.previewPane.classList.remove('mobile-hidden');
+      el.editorPane.classList.add('mobile-hidden');
+    }
+
+    renderAiContextBar();
+    await refreshAiSettingsStatus();
+    renderAiThread();
+    if (window.lucide) lucide.createIcons();
+    el.aiInput.focus();
+  }
+
+  function closeAiDrawer() {
+    state.aiOpen = false;
+    state.aiTarget = null;
+    el.aiDrawer.hidden = true;
+    if (window.innerWidth < 1024) {
+      el.tabEditor.click();
+    }
+    if (state.view === 'wizard' && state.wizardStep === 3) {
+      renderStage3Content();
+    }
+  }
+
   async function openSettingsModal() {
     try {
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
+      const ai = settings.ai || {};
+      el.aiProviderSelect.value = ai.provider || 'OpenAI';
+      el.aiModelInput.value = ai.model || 'gpt-4o-mini';
       el.keyOpenAI.value = keys.OpenAI || '';
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
@@ -1664,6 +2039,10 @@
         await fetchJson('/api/settings', {
           method: 'PUT',
           body: JSON.stringify({
+            ai: {
+              provider: el.aiProviderSelect.value,
+              model: el.aiModelInput.value.trim() || 'gpt-4o-mini',
+            },
             api_keys: {
               OpenAI: el.keyOpenAI.value,
               Gemini: el.keyGemini.value,
@@ -1674,9 +2053,34 @@
         });
         closeModal(el.modalSettings);
         showToast('Settings saved.', 'success');
+        if (state.aiOpen) {
+          await refreshAiSettingsStatus();
+          renderAiQuickChips();
+        }
       } catch (err) {
         showToast(err.message, 'error');
       }
+    });
+
+    // Writing Assistant Drawer
+    el.btnAiClose.addEventListener('click', closeAiDrawer);
+    el.btnAiReset.addEventListener('click', () => {
+      state.aiMessages = [];
+      renderAiThread();
+      el.aiInput.focus();
+    });
+    el.btnAiOpenSettings.addEventListener('click', openSettingsModal);
+
+    el.aiInput.addEventListener('input', () => autoResizeTextarea(el.aiInput));
+    el.aiInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAiMessage(el.aiInput.value);
+      }
+    });
+    el.aiComposerForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendAiMessage(el.aiInput.value);
     });
 
     // Preview Mode & Zoom
