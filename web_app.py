@@ -4,16 +4,26 @@ import re
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 from docxtpl import DocxTemplate
 
+from db import (
+    _clean_str,
+    create_resume_db,
+    delete_resume_db,
+    get_resume_db,
+    get_version_db,
+    init_db,
+    list_resumes_db,
+    make_slug,
+    normalize_resume_schema,
+    revert_version_db,
+    update_resume_db,
+)
 from resume_builder import (
-    RESUMES_DIR,
     TEMPLATE_PATH,
-    load_resume,
-    save_resume,
     load_settings,
     save_settings,
 )
@@ -23,25 +33,21 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 pdf_lock = threading.Lock()
+_db_initialized = False
+_db_lock = threading.Lock()
 
 
-def ensure_dirs():
-    RESUMES_DIR.mkdir(exist_ok=True)
-
-
-def resolve_resume_path(filename: str) -> Path | None:
-    """Safely resolve a resume JSON path inside RESUMES_DIR."""
-    clean_name = Path(filename).name
-    if not clean_name.endswith(".json") or clean_name != filename:
-        return None
-    target = (RESUMES_DIR / clean_name).resolve()
-    if target.parent != RESUMES_DIR.resolve():
-        return None
-    return target
+def ensure_db():
+    global _db_initialized
+    if not _db_initialized:
+        with _db_lock:
+            if not _db_initialized:
+                init_db()
+                _db_initialized = True
 
 
 def render_docx_file(data: dict, out_docx_path: Path) -> Path:
-    """Render resume JSON data into a .docx file using Base_Template.docx."""
+    """Render resume data into a .docx file using Base_Template.docx."""
     if not TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Template not found: {TEMPLATE_PATH}")
     doc = DocxTemplate(TEMPLATE_PATH)
@@ -52,148 +58,109 @@ def render_docx_file(data: dict, out_docx_path: Path) -> Path:
 
 @app.route("/")
 def index():
-    ensure_dirs()
+    ensure_db()
     return render_template("index.html")
 
 
 @app.route("/api/resumes", methods=["GET"])
 def list_resumes():
-    ensure_dirs()
-    items = []
-    for f in sorted(RESUMES_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            data = load_resume(f)
-            items.append({
-                "filename": f.name,
-                "name": data.get("name") or f.stem,
-                "email": data.get("email", ""),
-                "phone": data.get("phone", ""),
-                "section_count": len(data.get("sections", [])),
-                "section_titles": [s.get("title", "") for s in data.get("sections", [])],
-                "history_count": len(data.get("_history", [])),
-                "updated_at": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-            })
-        except Exception:
-            items.append({
-                "filename": f.name,
-                "name": f.stem,
-                "email": "",
-                "phone": "",
-                "section_count": 0,
-                "section_titles": [],
-                "history_count": 0,
-                "updated_at": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
-            })
-    return jsonify({"resumes": items})
+    ensure_db()
+    return jsonify({"resumes": list_resumes_db()})
 
 
 @app.route("/api/resumes", methods=["POST"])
 def create_resume_api():
-    ensure_dirs()
+    ensure_db()
     payload = request.get_json(silent=True) or {}
     name = (payload.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Full Name is required."}), 400
 
-    slug = re.sub(r"[^a-z0-9_]+", "_", name.lower()).strip("_")
-    if not slug:
-        slug = "resume"
-    filename = f"{slug}.json"
-    filepath = RESUMES_DIR / filename
-
-    if filepath.exists():
-        return jsonify({"error": f"A resume named '{filename}' already exists."}), 409
-
-    raw_sections = payload.get("sections")
-    data = normalize_resume_schema({
-        "name": name,
-        "phone": (payload.get("phone") or "").strip(),
-        "email": (payload.get("email") or "").strip(),
-        "portfolio": (payload.get("portfolio") or "").strip(),
-        "linkedin": (payload.get("linkedin") or "").strip(),
-        "sections": raw_sections if isinstance(raw_sections, list) else [],
-    })
-    save_resume(filepath, data)
-    return jsonify({"filename": filename, "data": data}), 201
+    try:
+        created = create_resume_db(payload)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(created), 201
 
 
-@app.route("/api/resumes/<filename>", methods=["GET"])
-def get_resume_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
+@app.route("/api/resumes/<int:resume_id>", methods=["GET"])
+def get_resume_api(resume_id):
+    ensure_db()
+    record = get_resume_db(resume_id)
+    if not record:
         return jsonify({"error": "Resume not found."}), 404
-    data = load_resume(filepath)
-    return jsonify({"filename": filepath.name, "data": data})
+    return jsonify(record)
 
 
-@app.route("/api/resumes/<filename>", methods=["PUT"])
-def update_resume_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
-        return jsonify({"error": "Resume not found."}), 404
-
+@app.route("/api/resumes/<int:resume_id>", methods=["PUT", "POST"])
+def update_resume_api(resume_id):
+    ensure_db()
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
-        return jsonify({"error": "Invalid JSON payload."}), 400
+        return jsonify({"error": "Invalid request payload."}), 400
 
-    existing = load_resume(filepath)
-    # Preserve existing _history unless explicitly managed via history endpoints
-    if "_history" not in payload and "_history" in existing:
-        payload["_history"] = existing["_history"]
+    if isinstance(payload.get("data"), dict):
+        save_mode = (payload.get("save_mode") or "autosave").strip().lower()
+        resume_data = payload["data"]
+    else:
+        save_mode = (payload.get("save_mode") or "snapshot").strip().lower()
+        resume_data = payload
 
-    save_resume(filepath, payload)
-    updated = load_resume(filepath)
-    return jsonify({"filename": filepath.name, "data": updated})
+    if save_mode not in ("autosave", "snapshot", "ai"):
+        save_mode = "autosave"
 
-
-@app.route("/api/resumes/<filename>", methods=["DELETE"])
-def delete_resume_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
+    updated = update_resume_db(resume_id, resume_data, save_mode=save_mode)
+    if not updated:
         return jsonify({"error": "Resume not found."}), 404
+    return jsonify(updated)
 
+
+@app.route("/api/resumes/<int:resume_id>", methods=["DELETE"])
+def delete_resume_api(resume_id):
+    ensure_db()
     payload = request.get_json(silent=True) or {}
-    confirm_name = payload.get("confirm_filename", "")
-    if confirm_name != filepath.name:
-        return jsonify({"error": "Confirmation filename does not match."}), 400
-
-    filepath.unlink()
-    return jsonify({"deleted": filepath.name})
-
-
-@app.route("/api/resumes/<filename>/history/<int:idx>/revert", methods=["POST"])
-def revert_history_api(filename, idx):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
-        return jsonify({"error": "Resume not found."}), 404
-
-    data = load_resume(filepath)
-    history = data.get("_history", [])
-    if idx < 0 or idx >= len(history):
-        return jsonify({"error": "Invalid history index."}), 400
-
-    target_state = dict(history[idx]["state"])
-    target_state["_history"] = history
-    save_resume(filepath, target_state)
-    updated = load_resume(filepath)
-    return jsonify({"filename": filepath.name, "data": updated})
+    confirm_name = payload.get("confirm_name", "")
+    ok, detail = delete_resume_db(resume_id, confirm_name)
+    if not ok:
+        if detail == "not_found":
+            return jsonify({"error": "Resume not found."}), 404
+        return jsonify({"error": "Confirmation name does not match."}), 400
+    return jsonify({"deleted_id": resume_id, "deleted_name": detail})
 
 
-@app.route("/api/resumes/<filename>/history/<int:idx>/export/<fmt>", methods=["GET"])
-def export_history_api(filename, idx, fmt):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
-        return jsonify({"error": "Resume not found."}), 404
-    if fmt not in ("docx", "pdf"):
-        return jsonify({"error": "Format must be docx or pdf."}), 400
+@app.route("/api/resumes/<int:resume_id>/history/<int:version_id>/revert", methods=["POST"])
+def revert_history_api(resume_id, version_id):
+    ensure_db()
+    updated = revert_version_db(resume_id, version_id)
+    if not updated:
+        return jsonify({"error": "Resume or history version not found."}), 404
+    return jsonify(updated)
 
-    data = load_resume(filepath)
-    history = data.get("_history", [])
-    if idx < 0 or idx >= len(history):
-        return jsonify({"error": "Invalid history index."}), 400
 
-    hist_state = history[idx]["state"]
-    out_docx = Path(f"{filepath.stem}_history_{idx + 1}_generated.docx").resolve()
+@app.route("/api/resumes/<int:resume_id>/history/<int:version_id>/export/<fmt>", methods=["GET"])
+def export_history_api(resume_id, version_id, fmt):
+    ensure_db()
+    if fmt not in ("docx", "pdf", "json"):
+        return jsonify({"error": "Format must be docx, pdf, or json."}), 400
+
+    ver = get_version_db(resume_id, version_id)
+    if not ver:
+        return jsonify({"error": "Resume or history version not found."}), 404
+
+    hist_state = ver["state"]
+    slug = ver["slug"]
+    ver_num = ver["version_num"]
+
+    if fmt == "json":
+        buf = BytesIO(json.dumps(hist_state, indent=2).encode("utf-8"))
+        return send_file(
+            buf,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=f"{slug}_v{ver_num}.json",
+        )
+
+    out_docx = Path(f"{slug}_history_v{ver_num}_generated.docx").resolve()
     render_docx_file(hist_state, out_docx)
 
     if fmt == "docx":
@@ -206,36 +173,54 @@ def export_history_api(filename, idx, fmt):
     return send_file(out_pdf, as_attachment=True, download_name=Path(out_pdf).name)
 
 
-@app.route("/api/resumes/<filename>/export/docx", methods=["POST"])
-def export_docx_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
+def _extract_export_payload(resume_id: int) -> tuple[dict | None, str | None]:
+    record = get_resume_db(resume_id)
+    if not record:
+        return None, None
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        data = normalize_resume_schema(payload["data"])
+    else:
+        data = normalize_resume_schema(record["data"])
+    slug = make_slug(data.get("name") or record["slug"])
+    return data, slug
+
+
+@app.route("/api/resumes/<int:resume_id>/export/json", methods=["POST"])
+def export_json_api(resume_id):
+    ensure_db()
+    data, slug = _extract_export_payload(resume_id)
+    if data is None:
+        return jsonify({"error": "Resume not found."}), 404
+    buf = BytesIO(json.dumps(data, indent=2).encode("utf-8"))
+    return send_file(
+        buf,
+        mimetype="application/json",
+        as_attachment=True,
+        download_name=f"{slug}.json",
+    )
+
+
+@app.route("/api/resumes/<int:resume_id>/export/docx", methods=["POST"])
+def export_docx_api(resume_id):
+    ensure_db()
+    data, slug = _extract_export_payload(resume_id)
+    if data is None:
         return jsonify({"error": "Resume not found."}), 404
 
-    payload = request.get_json(silent=True)
-    if isinstance(payload, dict) and payload.get("data"):
-        data = payload["data"]
-    else:
-        data = load_resume(filepath)
-
-    out_docx = Path(f"{filepath.stem}_generated.docx").resolve()
+    out_docx = Path(f"{slug}_generated.docx").resolve()
     render_docx_file(data, out_docx)
     return send_file(out_docx, as_attachment=True, download_name=out_docx.name)
 
 
-@app.route("/api/resumes/<filename>/export/pdf", methods=["POST"])
-def export_pdf_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
+@app.route("/api/resumes/<int:resume_id>/export/pdf", methods=["POST"])
+def export_pdf_api(resume_id):
+    ensure_db()
+    data, slug = _extract_export_payload(resume_id)
+    if data is None:
         return jsonify({"error": "Resume not found."}), 404
 
-    payload = request.get_json(silent=True)
-    if isinstance(payload, dict) and payload.get("data"):
-        data = payload["data"]
-    else:
-        data = load_resume(filepath)
-
-    out_docx = Path(f"{filepath.stem}_generated.docx").resolve()
+    out_docx = Path(f"{slug}_generated.docx").resolve()
     render_docx_file(data, out_docx)
 
     with pdf_lock:
@@ -246,14 +231,16 @@ def export_pdf_api(filename):
     return send_file(out_pdf, as_attachment=True, download_name=Path(out_pdf).name)
 
 
-@app.route("/api/resumes/<filename>/preview-pdf", methods=["GET"])
-def preview_pdf_api(filename):
-    filepath = resolve_resume_path(filename)
-    if not filepath or not filepath.exists():
+@app.route("/api/resumes/<int:resume_id>/preview-pdf", methods=["GET"])
+def preview_pdf_api(resume_id):
+    ensure_db()
+    record = get_resume_db(resume_id)
+    if not record:
         return jsonify({"error": "Resume not found."}), 404
 
-    data = load_resume(filepath)
-    out_docx = Path(f"{filepath.stem}_generated.docx").resolve()
+    data = normalize_resume_schema(record["data"])
+    slug = make_slug(data.get("name") or record["slug"])
+    out_docx = Path(f"{slug}_generated.docx").resolve()
     render_docx_file(data, out_docx)
 
     with pdf_lock:
@@ -384,81 +371,6 @@ def build_bullet_system_prompt(context: dict) -> str:
         "}\n"
         "Use an empty array [] for \"suggestions\" when you are only asking clarifying questions before drafting."
     )
-
-
-def _clean_str(val) -> str:
-    return val.strip() if isinstance(val, str) else (str(val).strip() if val is not None else "")
-
-
-def normalize_resume_schema(raw_data: dict, existing_data: dict = None) -> dict:
-    """Coerce an AI-produced or partial resume dict into the strict Base_Template schema."""
-    src = raw_data if isinstance(raw_data, dict) else {}
-    normalized = {
-        "name": _clean_str(src.get("name")),
-        "phone": _clean_str(src.get("phone")),
-        "email": _clean_str(src.get("email")),
-        "portfolio": _clean_str(src.get("portfolio")),
-        "linkedin": _clean_str(src.get("linkedin")),
-        "sections": [],
-    }
-
-    raw_sections = src.get("sections")
-    if isinstance(raw_sections, list):
-        for sec in raw_sections:
-            if not isinstance(sec, dict):
-                continue
-            title = _clean_str(sec.get("title")).upper()
-            if not title:
-                continue
-            is_skills = bool(sec.get("is_skills", False))
-            raw_items = sec.get("items") if isinstance(sec.get("items"), list) else []
-            clean_items = []
-            if is_skills:
-                for it in raw_items:
-                    if not isinstance(it, dict):
-                        continue
-                    cat = _clean_str(it.get("category"))
-                    txt = _clean_str(it.get("text"))
-                    if cat or txt:
-                        clean_items.append({"category": cat, "text": txt})
-            else:
-                for it in raw_items:
-                    if not isinstance(it, dict):
-                        continue
-                    raw_details = it.get("details") if isinstance(it.get("details"), list) else []
-                    clean_details = []
-                    for d in raw_details:
-                        if isinstance(d, dict):
-                            d_txt = _clean_str(d.get("text"))
-                            if d_txt:
-                                clean_details.append({
-                                    "is_bullet": bool(d.get("is_bullet", True)),
-                                    "text": d_txt,
-                                })
-                        elif isinstance(d, str) and d.strip():
-                            clean_details.append({"is_bullet": True, "text": d.strip()})
-
-                    item_obj = {
-                        "role": _clean_str(it.get("role")),
-                        "company": _clean_str(it.get("company")),
-                        "location": _clean_str(it.get("location")),
-                        "date": _clean_str(it.get("date")),
-                        "subtitle": _clean_str(it.get("subtitle")),
-                        "subtitle_right": _clean_str(it.get("subtitle_right")),
-                        "details": clean_details,
-                    }
-                    if any(item_obj[k] for k in ("role", "company", "location", "date", "subtitle", "subtitle_right")) or clean_details:
-                        clean_items.append(item_obj)
-            normalized["sections"].append({
-                "title": title,
-                "is_skills": is_skills,
-                "items": clean_items,
-            })
-
-    if isinstance(existing_data, dict) and "_history" in existing_data:
-        normalized["_history"] = existing_data["_history"]
-
-    return normalized
 
 
 def build_full_resume_system_prompt(resume_data: dict) -> str:
@@ -660,5 +572,5 @@ def ai_assist_api():
 
 
 if __name__ == "__main__":
-    ensure_dirs()
+    ensure_db()
     app.run(host="127.0.0.1", port=5050, debug=False)

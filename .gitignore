@@ -1,5 +1,6 @@
 venv/
 __pycache__/
 resumes/
+resumes.db*
 *_generated.docx
 settings.json

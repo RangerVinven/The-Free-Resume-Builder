@@ -904,6 +904,10 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+#btnStage4Pdf {
+  grid-column: 1 / -1;
+}
+
 /* Editor Cards */
 .editor-card {
   background-color: var(--bg-surface);

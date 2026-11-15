@@ -32,7 +32,6 @@
           <div class="divider-vertical" aria-hidden="true"></div>
           <div class="active-file-meta">
             <span id="activeResumeLabel" class="active-resume-title">New Resume</span>
-            <span id="activeFileBadge" class="mono-code" hidden></span>
           </div>
         </div>
       </div>
@@ -57,9 +56,9 @@
             <span id="saveStatusText">Saved</span>
           </div>
 
-          <button id="btnSave" class="btn btn-secondary btn-sm" title="Save changes (Ctrl/Cmd + S)">
-            <i data-lucide="save"></i>
-            <span>Save</span>
+          <button id="btnSave" class="btn btn-secondary btn-sm" title="Record a snapshot in Version History (Ctrl/Cmd + S)">
+            <i data-lucide="bookmark-plus"></i>
+            <span>Save Snapshot</span>
           </button>
 
           <button id="btnHistory" class="btn btn-secondary btn-sm" title="Version History">
@@ -73,6 +72,11 @@
           </button>
 
           <div class="divider-vertical" aria-hidden="true"></div>
+
+          <button id="btnExportJson" class="btn btn-secondary btn-sm" title="Export resume data as JSON">
+            <i data-lucide="braces"></i>
+            <span>JSON</span>
+          </button>
 
           <button id="btnExportDocx" class="btn btn-secondary btn-sm" title="Export as Microsoft Word (.docx)">
             <i data-lucide="file-down"></i>
@@ -98,7 +102,7 @@
           <div class="directory-search-wrap">
             <i data-lucide="search" class="search-icon"></i>
             <label for="resumeSearch" class="sr-only">Filter resumes</label>
-            <input id="resumeSearch" type="search" class="input-control search-input" placeholder="Filter by name or filename..." />
+            <input id="resumeSearch" type="search" class="input-control search-input" placeholder="Filter by name or email..." />
           </div>
         </div>
 
@@ -116,9 +120,9 @@
 
         <div id="directoryList" class="directory-table-card" hidden>
           <div class="directory-table-head">
-            <span>Candidate / File</span>
+            <span>Candidate</span>
             <span>Sections</span>
-            <span>Snapshots</span>
+            <span>Versions</span>
             <span>Last Modified</span>
             <span class="text-right">Actions</span>
           </div>
@@ -381,6 +385,10 @@
                         <i data-lucide="file-down"></i>
                         <span>Download DOCX</span>
                       </button>
+                      <button type="button" id="btnStage4Json" class="btn btn-secondary">
+                        <i data-lucide="braces"></i>
+                        <span>Export as JSON</span>
+                      </button>
                       <button type="button" id="btnStage4Pdf" class="btn btn-primary">
                         <i data-lucide="download"></i>
                         <span>Download PDF</span>
@@ -609,9 +617,9 @@
       </div>
       <form id="formDeleteResume">
         <div class="modal-body">
-          <p class="danger-warning">This action permanently removes the JSON file from disk and cannot be undone.</p>
+          <p class="danger-warning">This action permanently deletes this resume and all of its version history from the database and cannot be undone.</p>
           <div class="form-field">
-            <label for="confirmDeleteInput">Type <code id="deleteTargetName" class="mono-code"></code> to confirm:</label>
+            <label for="confirmDeleteInput">Type <strong id="deleteTargetName"></strong> to confirm:</label>
             <input id="confirmDeleteInput" type="text" class="input-control" autocomplete="off" />
           </div>
         </div>
@@ -633,7 +641,7 @@
         </button>
       </div>
       <div class="modal-body modal-scroll">
-        <p class="modal-description">Snapshots are recorded automatically whenever you save changes to a resume.</p>
+        <p class="modal-description">Versions are captured on creation, AI updates, automatic checkpoints, and whenever you click Save Snapshot.</p>
         <div id="historyList" class="history-list"></div>
       </div>
       <div class="modal-footer">
@@ -653,7 +661,7 @@
       </div>
       <form id="formSettings">
         <div class="modal-body modal-scroll">
-          <p class="modal-description">Configure your active model and API keys stored locally in <code class="mono-code">settings.json</code>.</p>
+          <p class="modal-description">Configure your active model and API keys stored locally on this machine.</p>
           <div class="form-stack">
             <div class="form-grid-2">
               <div class="form-field">

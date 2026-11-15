@@ -3,20 +3,28 @@
 
   const MAX_TEXTAREA_HEIGHT = 220;
 
+  const AUTO_SAVE_DELAY_MS = 700;
+
   const state = {
     view: 'directory', // 'directory' | 'wizard'
     resumes: [],
     searchQuery: '',
     isNewResume: false,
-    activeFilename: null,
+    activeResumeId: null,
+    activeResumeSlug: 'resume',
     data: null,
     isDirty: false,
+    localEditSeq: 0,
+    autoSaveTimer: null,
+    saveInFlight: false,
+    pendingSave: null, // { saveMode, silent }
     wizardStep: 1, // 1..4
     activeSectionIdx: 0,
     previewMode: 'live', // 'live' | 'pdf'
     zoom: 0.85,
     renameSectionIdx: null,
-    deleteTargetFilename: null,
+    deleteTargetId: null,
+    deleteTargetName: '',
     aiOpen: false,
     aiTarget: null, // { secIdx, itemIdx, detailIdx }
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
@@ -34,7 +42,6 @@
     wizardTopContext: document.getElementById('wizardTopContext'),
     btnBackToDirectory: document.getElementById('btnBackToDirectory'),
     activeResumeLabel: document.getElementById('activeResumeLabel'),
-    activeFileBadge: document.getElementById('activeFileBadge'),
     directoryTopActions: document.getElementById('directoryTopActions'),
     wizardTopActions: document.getElementById('wizardTopActions'),
     btnDirSettings: document.getElementById('btnDirSettings'),
@@ -45,6 +52,7 @@
     btnSave: document.getElementById('btnSave'),
     btnHistory: document.getElementById('btnHistory'),
     historyBadge: document.getElementById('historyBadge'),
+    btnExportJson: document.getElementById('btnExportJson'),
     btnExportDocx: document.getElementById('btnExportDocx'),
     btnExportPdf: document.getElementById('btnExportPdf'),
 
@@ -104,6 +112,7 @@
     btnStage4Save: document.getElementById('btnStage4Save'),
     btnStage4PreviewPdf: document.getElementById('btnStage4PreviewPdf'),
     btnStage4Docx: document.getElementById('btnStage4Docx'),
+    btnStage4Json: document.getElementById('btnStage4Json'),
     btnStage4Pdf: document.getElementById('btnStage4Pdf'),
     btnStage4OpenHistory: document.getElementById('btnStage4OpenHistory'),
     stage4HistoryPreview: document.getElementById('stage4HistoryPreview'),
@@ -234,17 +243,55 @@
     arr[j] = temp;
   }
 
-  function setDirty(dirty) {
-    state.isDirty = dirty;
+  function updateSaveIndicator(modeLabel) {
+    if (modeLabel === 'saving') {
+      el.saveStatus.className = 'status-pill status-dirty';
+      el.saveStatusText.textContent = 'Saving...';
+      return;
+    }
     if (state.isNewResume) {
       el.saveStatus.className = 'status-pill status-dirty';
-      el.saveStatusText.textContent = 'Draft (not saved)';
-    } else if (dirty) {
+      el.saveStatusText.textContent = (state.data?.name || '').trim()
+        ? 'Saving draft...'
+        : 'Enter name to auto-save';
+    } else if (state.isDirty) {
       el.saveStatus.className = 'status-pill status-dirty';
-      el.saveStatusText.textContent = 'Unsaved changes';
+      el.saveStatusText.textContent = 'Saving...';
     } else {
       el.saveStatus.className = 'status-pill status-saved';
-      el.saveStatusText.textContent = 'Saved';
+      el.saveStatusText.textContent = 'All changes saved';
+    }
+  }
+
+  function scheduleAutoSave(delayMs = AUTO_SAVE_DELAY_MS) {
+    if (state.autoSaveTimer) {
+      clearTimeout(state.autoSaveTimer);
+      state.autoSaveTimer = null;
+    }
+    if (state.view !== 'wizard' || !state.data) return;
+    const hasName = Boolean((state.data.name || '').trim());
+    if (state.isNewResume && !hasName) return;
+
+    state.autoSaveTimer = setTimeout(() => {
+      state.autoSaveTimer = null;
+      saveCurrentResume({ saveMode: 'autosave', silent: true }).catch(() => {
+        // Keep status accurate without spamming errors on transient keystroke
+        if (state.isDirty) {
+          el.saveStatus.className = 'status-pill status-dirty';
+          el.saveStatusText.textContent = 'Auto-save retrying';
+        }
+      });
+    }, delayMs);
+  }
+
+  function setDirty(dirty, skipAutoSave = false) {
+    state.isDirty = dirty;
+    if (dirty) {
+      state.localEditSeq += 1;
+    }
+    updateSaveIndicator();
+    if (dirty && !skipAutoSave && state.view === 'wizard') {
+      scheduleAutoSave();
     }
   }
 
@@ -269,13 +316,31 @@
   // VIEW SWITCHING: DIRECTORY <-> WIZARD
   // =========================================================
   async function showDirectoryView() {
-    if (state.view === 'wizard' && state.isDirty && !state.isNewResume) {
-      if (!confirm('You have unsaved changes. Return to the resume list without saving?')) {
-        return;
+    if (state.view === 'wizard' && state.data) {
+      if (state.autoSaveTimer) {
+        clearTimeout(state.autoSaveTimer);
+        state.autoSaveTimer = null;
+      }
+      if (state.isDirty) {
+        const hasName = Boolean((state.data.name || '').trim());
+        if (!state.isNewResume || hasName) {
+          try {
+            await saveCurrentResume({ saveMode: 'autosave', silent: true });
+          } catch {
+            if (!confirm('Could not auto-save recent changes. Return to the resume list anyway?')) {
+              return;
+            }
+          }
+        } else if ((state.data.sections || []).length > 0) {
+          if (!confirm('This draft has no Full Name yet and has not been saved. Discard draft and return to the resume list?')) {
+            return;
+          }
+        }
       }
     }
     state.view = 'directory';
-    state.activeFilename = null;
+    state.activeResumeId = null;
+    state.activeResumeSlug = 'resume';
     state.data = null;
     state.isNewResume = false;
     state.isDirty = false;
@@ -316,18 +381,17 @@
   function updateWizardHeaderMeta() {
     if (state.isNewResume) {
       el.activeResumeLabel.textContent = state.data?.name?.trim() || 'New Resume';
-      el.activeFileBadge.hidden = true;
       el.btnSave.disabled = false;
       el.btnHistory.disabled = true;
+      el.btnExportJson.disabled = true;
       el.btnExportDocx.disabled = true;
       el.btnExportPdf.disabled = true;
       el.historyBadge.hidden = true;
     } else {
-      el.activeResumeLabel.textContent = state.data?.name || state.activeFilename;
-      el.activeFileBadge.textContent = state.activeFilename;
-      el.activeFileBadge.hidden = false;
+      el.activeResumeLabel.textContent = state.data?.name || 'Untitled Resume';
       el.btnSave.disabled = false;
       el.btnHistory.disabled = false;
+      el.btnExportJson.disabled = false;
       el.btnExportDocx.disabled = false;
       el.btnExportPdf.disabled = false;
       const count = (state.data && Array.isArray(state.data._history)) ? state.data._history.length : 0;
@@ -349,7 +413,9 @@
     const q = state.searchQuery.trim().toLowerCase();
     const filtered = state.resumes.filter((r) => {
       if (!q) return true;
-      return (r.name || '').toLowerCase().includes(q) || (r.filename || '').toLowerCase().includes(q);
+      return (r.name || '').toLowerCase().includes(q)
+        || (r.email || '').toLowerCase().includes(q)
+        || (r.phone || '').toLowerCase().includes(q);
     });
 
     if (state.resumes.length === 0) {
@@ -371,14 +437,14 @@
       const row = document.createElement('div');
       row.className = 'directory-row';
 
-      // Candidate & file
+      // Candidate
       const colCand = document.createElement('div');
       colCand.className = 'dir-candidate';
       colCand.innerHTML = `
         <span class="dir-name">${escapeHtml(r.name)}</span>
         <div class="dir-meta-line">
-          <span class="mono-code">${escapeHtml(r.filename)}</span>
           ${r.email ? `<span>${escapeHtml(r.email)}</span>` : ''}
+          ${r.phone ? `<span>${escapeHtml(r.phone)}</span>` : ''}
         </div>
       `;
 
@@ -414,25 +480,32 @@
       btnEdit.type = 'button';
       btnEdit.className = 'btn btn-primary btn-xs';
       btnEdit.innerHTML = '<i data-lucide="pencil"></i><span>Edit</span>';
-      btnEdit.addEventListener('click', () => openExistingResumeInWizard(r.filename, 1));
+      btnEdit.addEventListener('click', () => openExistingResumeInWizard(r.id, 1));
+
+      const btnJson = document.createElement('button');
+      btnJson.type = 'button';
+      btnJson.className = 'btn btn-secondary btn-xs';
+      btnJson.title = 'Export as JSON';
+      btnJson.textContent = 'JSON';
+      btnJson.addEventListener('click', () => downloadDirectFile(r.id, r.slug || 'resume', 'json', btnJson));
 
       const btnDocx = document.createElement('button');
       btnDocx.type = 'button';
       btnDocx.className = 'btn btn-secondary btn-xs';
       btnDocx.title = 'Download DOCX';
       btnDocx.textContent = 'DOCX';
-      btnDocx.addEventListener('click', () => downloadDirectFile(r.filename, 'docx', btnDocx));
+      btnDocx.addEventListener('click', () => downloadDirectFile(r.id, r.slug || 'resume', 'docx', btnDocx));
 
       const btnPdf = document.createElement('button');
       btnPdf.type = 'button';
       btnPdf.className = 'btn btn-secondary btn-xs';
       btnPdf.title = 'Download PDF';
       btnPdf.textContent = 'PDF';
-      btnPdf.addEventListener('click', () => downloadDirectFile(r.filename, 'pdf', btnPdf));
+      btnPdf.addEventListener('click', () => downloadDirectFile(r.id, r.slug || 'resume', 'pdf', btnPdf));
 
-      const btnDel = makeIconButton('trash-2', 'Delete Resume', false, () => openDeleteModal(r.filename), 'btn-danger-hover');
+      const btnDel = makeIconButton('trash-2', 'Delete Resume', false, () => openDeleteModal(r.id, r.name), 'btn-danger-hover');
 
-      colActions.append(btnEdit, btnDocx, btnPdf, btnDel);
+      colActions.append(btnEdit, btnJson, btnDocx, btnPdf, btnDel);
       row.append(colCand, colSecs, colHist, colTime, colActions);
       el.directoryRows.appendChild(row);
     });
@@ -440,12 +513,12 @@
     if (window.lucide) lucide.createIcons();
   }
 
-  async function downloadDirectFile(filename, format, btn) {
+  async function downloadDirectFile(resumeId, slug, format, btn) {
     const orig = btn.textContent;
     btn.disabled = true;
     btn.textContent = '...';
     try {
-      const res = await fetch(`/api/resumes/${encodeURIComponent(filename)}/export/${format}`, {
+      const res = await fetch(`/api/resumes/${encodeURIComponent(resumeId)}/export/${format}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -455,7 +528,8 @@
         throw new Error(err.error || 'Export failed.');
       }
       const blob = await res.blob();
-      const outName = `${filename.replace('.json', '')}_generated.${format}`;
+      const safeSlug = slug || 'resume';
+      const outName = format === 'json' ? `${safeSlug}.json` : `${safeSlug}_generated.${format}`;
       triggerDownload(blob, outName);
       showToast(`Exported ${outName}`, 'success');
     } catch (err) {
@@ -484,7 +558,8 @@
 
   function startNewResumeWizard(initialMode = 'manual') {
     state.isNewResume = true;
-    state.activeFilename = null;
+    state.activeResumeId = null;
+    state.activeResumeSlug = 'resume';
     state.wizardStep = 1;
     state.activeSectionIdx = 0;
     state.fullAiMessages = [];
@@ -497,24 +572,25 @@
       linkedin: '',
       sections: [],
     };
-    setDirty(true);
+    setDirty(false, true);
     enterWizardView(initialMode);
     if (initialMode === 'manual') {
       el.fieldName.focus();
     }
   }
 
-  async function openExistingResumeInWizard(filename, startStep = 1) {
-    const res = await fetchJson(`/api/resumes/${encodeURIComponent(filename)}`);
+  async function openExistingResumeInWizard(resumeId, startStep = 1) {
+    const res = await fetchJson(`/api/resumes/${encodeURIComponent(resumeId)}`);
     state.isNewResume = false;
-    state.activeFilename = res.filename;
+    state.activeResumeId = res.id;
+    state.activeResumeSlug = res.slug || 'resume';
     state.data = res.data;
     if (!Array.isArray(state.data.sections)) {
       state.data.sections = [];
     }
     state.wizardStep = startStep;
     state.activeSectionIdx = 0;
-    setDirty(false);
+    setDirty(false, true);
     enterWizardView();
   }
 
@@ -568,15 +644,19 @@
     renderWizardStep();
   }
 
-  async function createDraftResumeOnServer() {
-    const name = (state.data.name || '').trim();
+  async function createDraftResumeOnServer({ silent = false } = {}) {
+    const name = (state.data?.name || '').trim();
     if (!name) {
-      showToast('Please enter a Full Name (or tell the AI your name) before saving.', 'error');
-      if (state.editorMode === 'manual') {
-        el.fieldName.focus();
+      if (!silent) {
+        showToast('Please enter a Full Name (or tell the AI your name) before saving.', 'error');
+        if (state.editorMode === 'manual') {
+          el.fieldName.focus();
+        }
       }
       return false;
     }
+    const sentSeq = state.localEditSeq;
+    updateSaveIndicator('saving');
     try {
       const res = await fetchJson('/api/resumes', {
         method: 'POST',
@@ -590,37 +670,104 @@
         }),
       });
       state.isNewResume = false;
-      state.activeFilename = res.filename;
-      state.data = res.data;
-      setDirty(false);
+      state.activeResumeId = res.id;
+      state.activeResumeSlug = res.slug || 'resume';
+      // Preserve live in-memory object references in case user kept typing during request
+      state.data._history = res.data._history || [];
+      if (state.localEditSeq === sentSeq) {
+        setDirty(false, true);
+      } else {
+        setDirty(true);
+      }
       updateWizardHeaderMeta();
-      showToast(`Created ${res.filename}`, 'success');
+      if (!silent) {
+        showToast(`Created resume for ${res.data.name}`, 'success');
+      }
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (!silent) {
+        showToast(err.message, 'error');
+      }
       return false;
     }
   }
 
-  async function saveCurrentResume(silent = false) {
-    if (!state.data) return;
-    if (state.isNewResume) {
-      await createDraftResumeOnServer();
-      renderWizardStep();
-      return;
+  async function saveCurrentResume(opts = {}) {
+    // Support legacy boolean call saveCurrentResume(true/false) as well as options object
+    const options = typeof opts === 'boolean'
+      ? { saveMode: opts ? 'autosave' : 'snapshot', silent: opts }
+      : { saveMode: 'snapshot', silent: false, ...opts };
+
+    if (!state.data) return false;
+
+    if (state.autoSaveTimer) {
+      clearTimeout(state.autoSaveTimer);
+      state.autoSaveTimer = null;
     }
-    const res = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeFilename)}`, {
-      method: 'PUT',
-      body: JSON.stringify(state.data),
-    });
-    state.data = res.data;
-    setDirty(false);
-    updateWizardHeaderMeta();
-    if (state.wizardStep === 4) {
-      renderStage4Review();
+
+    if (state.saveInFlight) {
+      const prevMode = state.pendingSave?.saveMode;
+      const mergedMode = (prevMode === 'snapshot' || options.saveMode === 'snapshot')
+        ? 'snapshot'
+        : ((prevMode === 'ai' || options.saveMode === 'ai') ? 'ai' : 'autosave');
+      state.pendingSave = {
+        saveMode: mergedMode,
+        silent: Boolean(state.pendingSave?.silent ?? true) && options.silent,
+      };
+      return true;
     }
-    if (!silent) {
-      showToast('Resume saved successfully.', 'success');
+
+    state.saveInFlight = true;
+    try {
+      if (state.isNewResume) {
+        const created = await createDraftResumeOnServer({ silent: options.silent });
+        if (created && state.wizardStep === 4) {
+          renderStage4Review();
+        }
+        return created;
+      }
+
+      const sentSeq = state.localEditSeq;
+      updateSaveIndicator('saving');
+      const res = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          save_mode: options.saveMode,
+          data: state.data,
+        }),
+      });
+      state.activeResumeSlug = res.slug || state.activeResumeSlug;
+      const prevHistoryLen = Array.isArray(state.data._history) ? state.data._history.length : 0;
+      const nextHistory = Array.isArray(res.data?._history) ? res.data._history : [];
+      // Preserve live section/item object references so active inputs/textareas stay bound
+      state.data._history = nextHistory;
+
+      if (state.localEditSeq === sentSeq) {
+        setDirty(false, true);
+      } else {
+        setDirty(true);
+      }
+      updateWizardHeaderMeta();
+      if (state.wizardStep === 4) {
+        renderStage4Review();
+      }
+      if (!options.silent) {
+        if (options.saveMode === 'snapshot' && nextHistory.length > prevHistoryLen) {
+          showToast('Saved snapshot to Version History.', 'success');
+        } else if (options.saveMode === 'snapshot') {
+          showToast('All changes saved (matches latest snapshot).', 'success');
+        } else {
+          showToast('Resume saved.', 'success');
+        }
+      }
+      return true;
+    } finally {
+      state.saveInFlight = false;
+      if (state.pendingSave) {
+        const nextOpts = state.pendingSave;
+        state.pendingSave = null;
+        await saveCurrentResume(nextOpts);
+      }
     }
   }
 
@@ -1339,7 +1486,7 @@
     const history = d._history || [];
     el.stage4HistoryPreview.innerHTML = '';
     if (history.length === 0) {
-      el.stage4HistoryPreview.innerHTML = '<p class="field-hint margin-none">No snapshots recorded yet. Click "Save Snapshot" after making edits.</p>';
+      el.stage4HistoryPreview.innerHTML = '<p class="field-hint margin-none">No versions recorded yet. Click "Save Snapshot" to capture one.</p>';
     } else {
       const start = Math.max(0, history.length - 3);
       for (let i = history.length - 1; i >= start; i--) {
@@ -1352,27 +1499,35 @@
 
   function buildHistoryRow(entry, idx) {
     const sCount = (entry.state && entry.state.sections) ? entry.state.sections.length : 0;
+    const versionNum = entry.version_num || (idx + 1);
+    const versionId = entry.id;
+    const labelText = entry.label ? ` (${entry.label})` : '';
     const row = document.createElement('div');
     row.className = 'history-row';
 
     const meta = document.createElement('div');
     meta.className = 'history-meta';
     meta.innerHTML = `
-      <span class="history-time">Version #${idx + 1} &mdash; ${escapeHtml(entry.timestamp)}</span>
+      <span class="history-time">Version #${versionNum}${escapeHtml(labelText)} &mdash; ${escapeHtml(entry.timestamp)}</span>
       <span class="history-summary">${escapeHtml(entry.state?.name || '')} &bull; ${sCount} section(s)</span>
     `;
 
     const actions = document.createElement('div');
     actions.className = 'history-actions';
 
+    const btnJson = document.createElement('a');
+    btnJson.className = 'btn btn-secondary btn-xs';
+    btnJson.href = `/api/resumes/${encodeURIComponent(state.activeResumeId)}/history/${encodeURIComponent(versionId)}/export/json`;
+    btnJson.textContent = 'JSON';
+
     const btnDocx = document.createElement('a');
     btnDocx.className = 'btn btn-secondary btn-xs';
-    btnDocx.href = `/api/resumes/${encodeURIComponent(state.activeFilename)}/history/${idx}/export/docx`;
+    btnDocx.href = `/api/resumes/${encodeURIComponent(state.activeResumeId)}/history/${encodeURIComponent(versionId)}/export/docx`;
     btnDocx.textContent = 'DOCX';
 
     const btnPdf = document.createElement('a');
     btnPdf.className = 'btn btn-secondary btn-xs';
-    btnPdf.href = `/api/resumes/${encodeURIComponent(state.activeFilename)}/history/${idx}/export/pdf`;
+    btnPdf.href = `/api/resumes/${encodeURIComponent(state.activeResumeId)}/history/${encodeURIComponent(versionId)}/export/pdf`;
     btnPdf.textContent = 'PDF';
 
     const btnRevert = document.createElement('button');
@@ -1380,27 +1535,28 @@
     btnRevert.className = 'btn btn-primary btn-xs';
     btnRevert.textContent = 'Revert';
     btnRevert.addEventListener('click', async () => {
-      if (!confirm(`Revert to Version #${idx + 1} (${entry.timestamp})? Your current state will be archived in history.`)) {
+      if (!confirm(`Revert to Version #${versionNum} (${entry.timestamp})? Your current state will be archived in history.`)) {
         return;
       }
       try {
-        const res = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeFilename)}/history/${idx}/revert`, {
+        const res = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/history/${encodeURIComponent(versionId)}/revert`, {
           method: 'POST',
         });
         state.data = res.data;
-        setDirty(false);
+        state.activeResumeSlug = res.slug || state.activeResumeSlug;
+        setDirty(false, true);
         updateWizardHeaderMeta();
         bindContactFields();
         renderWizardStep();
         renderPreview();
         closeModal(el.modalHistory);
-        showToast(`Reverted to Version #${idx + 1}.`, 'success');
+        showToast(`Reverted to Version #${versionNum}.`, 'success');
       } catch (err) {
         showToast(err.message, 'error');
       }
     });
 
-    actions.append(btnDocx, btnPdf, btnRevert);
+    actions.append(btnJson, btnDocx, btnPdf, btnRevert);
     row.append(meta, actions);
     return row;
   }
@@ -1519,15 +1675,15 @@
       }
       renderWizardStep();
     }
-    if (!state.activeFilename) return;
+    if (!state.activeResumeId) return;
     if (state.isDirty) {
-      await saveCurrentResume(true);
+      await saveCurrentResume({ saveMode: 'autosave', silent: true });
     }
     el.pdfLoadingState.hidden = false;
     el.pdfFrame.onload = () => {
       el.pdfLoadingState.hidden = true;
     };
-    el.pdfFrame.src = `/api/resumes/${encodeURIComponent(state.activeFilename)}/preview-pdf?t=${Date.now()}`;
+    el.pdfFrame.src = `/api/resumes/${encodeURIComponent(state.activeResumeId)}/preview-pdf?t=${Date.now()}`;
   }
 
   async function exportWizardFile(format) {
@@ -1536,18 +1692,18 @@
       if (!ok) return;
       renderWizardStep();
     }
-    if (!state.activeFilename || !state.data) return;
+    if (!state.activeResumeId || !state.data) return;
     if (state.isDirty) {
-      await saveCurrentResume(true);
+      await saveCurrentResume({ saveMode: 'autosave', silent: true });
     }
 
-    const btn = format === 'pdf' ? el.btnExportPdf : el.btnExportDocx;
+    const btn = format === 'pdf' ? el.btnExportPdf : (format === 'json' ? el.btnExportJson : el.btnExportDocx);
     const origHtml = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span>Exporting...</span>';
 
     try {
-      const res = await fetch(`/api/resumes/${encodeURIComponent(state.activeFilename)}/export/${format}`, {
+      const res = await fetch(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/export/${format}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: state.data }),
@@ -1557,7 +1713,8 @@
         throw new Error(err.error || 'Export failed.');
       }
       const blob = await res.blob();
-      const outName = `${state.activeFilename.replace('.json', '')}_generated.${format}`;
+      const safeSlug = state.activeResumeSlug || 'resume';
+      const outName = format === 'json' ? `${safeSlug}.json` : `${safeSlug}_generated.${format}`;
       triggerDownload(blob, outName);
       showToast(`Exported ${outName}`, 'success');
     } catch (err) {
@@ -1572,9 +1729,10 @@
   // =========================================================
   // MODALS
   // =========================================================
-  function openDeleteModal(filename) {
-    state.deleteTargetFilename = filename;
-    el.deleteTargetName.textContent = filename;
+  function openDeleteModal(resumeId, resumeName) {
+    state.deleteTargetId = resumeId;
+    state.deleteTargetName = (resumeName || '').trim();
+    el.deleteTargetName.textContent = state.deleteTargetName;
     el.confirmDeleteInput.value = '';
     el.btnConfirmDeleteResume.disabled = true;
     openModal(el.modalDeleteResume);
@@ -2044,10 +2202,13 @@
           state.data._history = preservedHistory;
         }
         el.btnFullAiUndo.hidden = false;
-        setDirty(true);
+        setDirty(true, true);
         updateWizardHeaderMeta();
         bindContactFields();
         renderPreview();
+        if ((state.data?.name || '').trim()) {
+          await saveCurrentResume({ saveMode: 'ai', silent: true }).catch(() => {});
+        }
       }
 
       state.fullAiMessages.push({
@@ -2205,28 +2366,46 @@
     });
 
     // Stage 4 actions
-    el.btnStage4Save.addEventListener('click', () => saveCurrentResume(false).catch((e) => showToast(e.message, 'error')));
+    el.btnStage4Save.addEventListener('click', () => saveCurrentResume({ saveMode: 'snapshot', silent: false }).catch((e) => showToast(e.message, 'error')));
     el.btnStage4PreviewPdf.addEventListener('click', () => setPreviewMode('pdf'));
     el.btnStage4Docx.addEventListener('click', () => exportWizardFile('docx'));
+    el.btnStage4Json.addEventListener('click', () => exportWizardFile('json'));
     el.btnStage4Pdf.addEventListener('click', () => exportWizardFile('pdf'));
     el.btnStage4OpenHistory.addEventListener('click', openHistoryModal);
 
     // Topbar wizard actions
-    el.btnSave.addEventListener('click', () => saveCurrentResume(false).catch((e) => showToast(e.message, 'error')));
+    el.btnSave.addEventListener('click', () => saveCurrentResume({ saveMode: 'snapshot', silent: false }).catch((e) => showToast(e.message, 'error')));
     el.btnHistory.addEventListener('click', openHistoryModal);
+    el.btnExportJson.addEventListener('click', () => exportWizardFile('json'));
     el.btnExportDocx.addEventListener('click', () => exportWizardFile('docx'));
     el.btnExportPdf.addEventListener('click', () => exportWizardFile('pdf'));
+
+    // Flush unsaved changes if user closes or navigates away from tab
+    window.addEventListener('beforeunload', () => {
+      if (state.view === 'wizard' && state.isDirty && state.activeResumeId && state.data) {
+        try {
+          fetch(`/api/resumes/${encodeURIComponent(state.activeResumeId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            body: JSON.stringify({ save_mode: 'autosave', data: state.data }),
+          });
+        } catch {
+          // ignore
+        }
+      }
+    });
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         if (state.view === 'wizard') {
           e.preventDefault();
-          saveCurrentResume(false).catch((err) => showToast(err.message, 'error'));
+          saveCurrentResume({ saveMode: 'snapshot', silent: false }).catch((err) => showToast(err.message, 'error'));
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
       }
     });
 
@@ -2265,18 +2444,18 @@
 
     // Delete Resume Modal
     el.confirmDeleteInput.addEventListener('input', () => {
-      el.btnConfirmDeleteResume.disabled = el.confirmDeleteInput.value !== state.deleteTargetFilename;
+      el.btnConfirmDeleteResume.disabled = el.confirmDeleteInput.value.trim() !== state.deleteTargetName;
     });
 
     el.formDeleteResume.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        await fetchJson(`/api/resumes/${encodeURIComponent(state.deleteTargetFilename)}`, {
+        await fetchJson(`/api/resumes/${encodeURIComponent(state.deleteTargetId)}`, {
           method: 'DELETE',
-          body: JSON.stringify({ confirm_filename: el.confirmDeleteInput.value }),
+          body: JSON.stringify({ confirm_name: el.confirmDeleteInput.value.trim() }),
         });
         closeModal(el.modalDeleteResume);
-        showToast(`Deleted ${state.deleteTargetFilename}`, 'success');
+        showToast(`Deleted "${state.deleteTargetName}"`, 'success');
         await loadResumeList();
       } catch (err) {
         showToast(err.message, 'error');
