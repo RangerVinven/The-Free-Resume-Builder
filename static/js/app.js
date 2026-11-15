@@ -176,7 +176,8 @@
   function autoResizeTextarea(ta) {
     if (!ta) return;
     ta.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(ta.scrollHeight, 40), MAX_TEXTAREA_HEIGHT);
+    const minH = ta.classList.contains('ai-input') ? 38 : 40;
+    const nextHeight = Math.min(Math.max(ta.scrollHeight, minH), MAX_TEXTAREA_HEIGHT);
     ta.style.height = `${nextHeight}px`;
   }
 

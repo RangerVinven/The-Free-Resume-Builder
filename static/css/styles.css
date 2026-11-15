@@ -1815,12 +1815,16 @@ textarea:focus-visible {
 }
 
 .ai-input {
-  min-height: 40px;
+  height: 38px;
+  min-height: 38px;
   max-height: 140px;
+  padding: 8px 10px;
+  line-height: 20px;
 }
 
 .ai-send-btn {
   height: 38px;
+  padding: 0 14px;
   flex-shrink: 0;
 }
 
