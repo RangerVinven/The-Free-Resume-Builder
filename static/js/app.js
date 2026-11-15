@@ -31,8 +31,6 @@
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
     editorMode: 'manual', // 'manual' | 'ai'
-    targetJobTitle: '',
-    jobDescription: '',
     fullAiMessages: [], // { role: 'user'|'assistant', content: string, changes?: string[] }
     fullAiLoading: false,
     lastAiUndoState: null, // deep copy of resume data prior to latest AI edit
@@ -72,8 +70,6 @@
     wizardView: document.getElementById('wizardView'),
     modeManualEditor: document.getElementById('modeManualEditor'),
     modeAiBuilder: document.getElementById('modeAiBuilder'),
-    btnTargetJob: document.getElementById('btnTargetJob'),
-    targetJobBtnLabel: document.getElementById('targetJobBtnLabel'),
     btnToggleEditorMode: document.getElementById('btnToggleEditorMode'),
     toggleEditorModeLabel: document.getElementById('toggleEditorModeLabel'),
     manualEditorView: document.getElementById('manualEditorView'),
@@ -173,12 +169,6 @@
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
     btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
 
-    modalTargetJob: document.getElementById('modalTargetJob'),
-    formTargetJob: document.getElementById('formTargetJob'),
-    inputTargetJobTitle: document.getElementById('inputTargetJobTitle'),
-    inputJobDescription: document.getElementById('inputJobDescription'),
-    btnClearTargetJob: document.getElementById('btnClearTargetJob'),
-
     // Full-Resume AI Builder View
     fullAiModelBadge: document.getElementById('fullAiModelBadge'),
     btnFullAiUndo: document.getElementById('btnFullAiUndo'),
@@ -220,6 +210,229 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function applyEmphasisMarkdown(escapedStr) {
+    return escapedStr
+      .replace(/\*\*\*([^\s*\n](?:[^*\n]*?[^\s*\n])?)\*\*\*/g, '<strong><em>$1</em></strong>')
+      .replace(/\*\*([^\s*\n](?:[^*\n]*?[^\s*\n])?)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(>])__([^\s_\n](?:[^_\n]*?[^\s_\n])?)__(?=$|[\s.,;:!?)\]<])/g, '$1<strong>$2</strong>')
+      .replace(/\*([^\s*\n](?:[^*\n]*?[^\s*\n])?)\*/g, '<em>$1</em>')
+      .replace(/(^|[\s(>])_([^\s_\n](?:[^_\n]*?[^\s_\n])?)_(?=$|[\s.,;:!?)\]<])/g, '$1<em>$2</em>');
+  }
+
+  function renderInlineMarkdown(rawStr) {
+    if (!rawStr) return '';
+    const cleaned = String(rawStr).replace(/\u0000/g, '');
+    const codeTokens = [];
+    const withCodeTokens = cleaned.replace(/`([^`\n]+)`/g, (_, code) => {
+      const idx = codeTokens.length;
+      codeTokens.push(`<code class="md-inline-code">${escapeHtml(code)}</code>`);
+      return `\u0000CODE${idx}\u0000`;
+    });
+
+    const escaped = escapeHtml(withCodeTokens);
+    const linkTokens = [];
+    const withLinkTokens = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+      const idx = linkTokens.length;
+      const renderedLabel = applyEmphasisMarkdown(label);
+      linkTokens.push(`<a href="${url}" target="_blank" rel="noopener noreferrer">${renderedLabel}</a>`);
+      return `\u0000LINK${idx}\u0000`;
+    });
+
+    let out = applyEmphasisMarkdown(withLinkTokens);
+    out = out.replace(/\u0000LINK(\d+)\u0000/g, (_, idx) => linkTokens[Number(idx)] || '');
+    out = out.replace(/\u0000CODE(\d+)\u0000/g, (_, idx) => codeTokens[Number(idx)] || '');
+    return out;
+  }
+
+  function parseTableCells(rowLine) {
+    const trimmed = rowLine.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return trimmed.split('|').map((c) => c.trim());
+  }
+
+  function renderMarkdownBlocks(lines) {
+    const html = [];
+    let paragraph = [];
+    let blockquote = [];
+    const listStack = []; // [{ tag: 'ul'|'ol', indent: number, hasOpenLi: boolean }]
+
+    const flushParagraph = () => {
+      if (paragraph.length === 0) return;
+      const body = paragraph.map((l) => renderInlineMarkdown(l)).join('<br />');
+      html.push(`<p>${body}</p>`);
+      paragraph = [];
+    };
+
+    const flushBlockquote = () => {
+      if (blockquote.length === 0) return;
+      const inner = blockquote.map((l) => renderInlineMarkdown(l)).join('<br />');
+      html.push(`<blockquote>${inner}</blockquote>`);
+      blockquote = [];
+    };
+
+    const closeListsDownTo = (targetLen) => {
+      while (listStack.length > targetLen) {
+        const top = listStack.pop();
+        if (top.hasOpenLi) html.push('</li>');
+        html.push(`</${top.tag}>`);
+      }
+    };
+
+    const flushAllOpen = () => {
+      flushParagraph();
+      flushBlockquote();
+      closeListsDownTo(0);
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        flushAllOpen();
+        continue;
+      }
+
+      if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        flushAllOpen();
+        html.push('<hr />');
+        continue;
+      }
+
+      const headingMatch = line.match(/^\s*(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        flushAllOpen();
+        const level = headingMatch[1].length;
+        const tag = level === 1 ? 'h3' : level === 2 ? 'h4' : 'h5';
+        html.push(`<${tag} class="md-heading md-h${Math.min(level, 3)}">${renderInlineMarkdown(headingMatch[2])}</${tag}>`);
+        continue;
+      }
+
+      // GFM pipe table (header + separator row)
+      if (trimmed.includes('|') && i + 1 < lines.length && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*(?:\s*:?-{3,}:?\s*\|?)?\s*$/.test(lines[i + 1])) {
+        flushAllOpen();
+        const headers = parseTableCells(line);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+          rows.push(parseTableCells(lines[i]));
+          i += 1;
+        }
+        i -= 1;
+        const thead = `<thead><tr>${headers.map((h) => `<th>${renderInlineMarkdown(h)}</th>`).join('')}</tr></thead>`;
+        const tbody = rows.length
+          ? `<tbody>${rows.map((r) => `<tr>${headers.map((_, idx) => `<td>${renderInlineMarkdown(r[idx] || '')}</td>`).join('')}</tr>`).join('')}</tbody>`
+          : '';
+        html.push(`<div class="md-table-wrap"><table class="md-table">${thead}${tbody}</table></div>`);
+        continue;
+      }
+
+      const bqMatch = line.match(/^\s*>\s?(.*)$/);
+      if (bqMatch) {
+        flushParagraph();
+        closeListsDownTo(0);
+        blockquote.push(bqMatch[1]);
+        continue;
+      }
+
+      const ulMatch = line.match(/^(\s*)[-*•]\s+(.+)$/);
+      const olMatch = !ulMatch ? line.match(/^(\s*)\d+[.)]\s+(.+)$/) : null;
+      if (ulMatch || olMatch) {
+        flushParagraph();
+        flushBlockquote();
+        const match = ulMatch || olMatch;
+        const tag = ulMatch ? 'ul' : 'ol';
+        const indent = match[1].replace(/\t/g, '  ').length;
+        const content = match[2];
+
+        if (listStack.length === 0) {
+          html.push(`<${tag}>`);
+          listStack.push({ tag, indent, hasOpenLi: false });
+        } else {
+          while (listStack.length > 0 && indent < listStack[listStack.length - 1].indent) {
+            const top = listStack.pop();
+            if (top.hasOpenLi) html.push('</li>');
+            html.push(`</${top.tag}>`);
+          }
+          if (listStack.length === 0) {
+            html.push(`<${tag}>`);
+            listStack.push({ tag, indent, hasOpenLi: false });
+          } else {
+            const top = listStack[listStack.length - 1];
+            if (indent > top.indent) {
+              if (!top.hasOpenLi) {
+                html.push('<li>');
+                top.hasOpenLi = true;
+              }
+              html.push(`<${tag}>`);
+              listStack.push({ tag, indent, hasOpenLi: false });
+            } else if (top.tag !== tag) {
+              if (top.hasOpenLi) html.push('</li>');
+              html.push(`</${top.tag}><${tag}>`);
+              top.tag = tag;
+              top.hasOpenLi = false;
+            } else if (top.hasOpenLi) {
+              html.push('</li>');
+              top.hasOpenLi = false;
+            }
+          }
+        }
+
+        html.push(`<li>${renderInlineMarkdown(content)}`);
+        listStack[listStack.length - 1].hasOpenLi = true;
+        continue;
+      }
+
+      flushBlockquote();
+      closeListsDownTo(0);
+      paragraph.push(line);
+    }
+
+    flushAllOpen();
+    return html.join('');
+  }
+
+  function renderMarkdownToSafeHtml(rawText) {
+    if (!rawText) return '';
+    const normalized = String(rawText).replace(/\r\n?/g, '\n');
+    const rawLines = normalized.split('\n');
+    const out = [];
+    let proseLines = [];
+    let inFence = false;
+    let fenceLines = [];
+
+    const flushProse = () => {
+      if (proseLines.length > 0) {
+        out.push(renderMarkdownBlocks(proseLines));
+        proseLines = [];
+      }
+    };
+
+    rawLines.forEach((line) => {
+      if (/^\s*```/.test(line)) {
+        if (!inFence) {
+          flushProse();
+          inFence = true;
+          fenceLines = [];
+        } else {
+          out.push(`<pre class="md-pre"><code>${escapeHtml(fenceLines.join('\n'))}</code></pre>`);
+          inFence = false;
+          fenceLines = [];
+        }
+      } else if (inFence) {
+        fenceLines.push(line);
+      } else {
+        proseLines.push(line);
+      }
+    });
+
+    if (inFence && fenceLines.length > 0) {
+      out.push(`<pre class="md-pre"><code>${escapeHtml(fenceLines.join('\n'))}</code></pre>`);
+    }
+    flushProse();
+
+    return out.join('');
   }
 
   function autoResizeTextarea(ta) {
@@ -361,8 +574,6 @@
     state.aiOpen = false;
     state.aiTarget = null;
     state.editorMode = 'manual';
-    state.targetJobTitle = '';
-    state.jobDescription = '';
     state.fullAiMessages = [];
     state.fullAiLoading = false;
     state.lastAiUndoState = null;
@@ -388,7 +599,6 @@
     // Reset preview mode to live HTML when entering wizard
     setPreviewMode('live');
     updateWizardHeaderMeta();
-    updateTargetJobBadge();
     bindContactFields();
     renderWizardStep();
     renderPreview();
@@ -609,8 +819,6 @@
     state.activeResumeSlug = 'resume';
     state.wizardStep = 1;
     state.activeSectionIdx = 0;
-    state.targetJobTitle = '';
-    state.jobDescription = '';
     state.fullAiMessages = [];
     state.lastAiUndoState = null;
     state.data = {
@@ -633,8 +841,6 @@
     state.isNewResume = false;
     state.activeResumeId = res.id;
     state.activeResumeSlug = res.slug || 'resume';
-    state.targetJobTitle = res.target_job_title || '';
-    state.jobDescription = res.job_description || '';
     state.data = res.data;
     if (!Array.isArray(state.data.sections)) {
       state.data.sections = [];
@@ -718,8 +924,6 @@
           portfolio: state.data.portfolio,
           linkedin: state.data.linkedin,
           sections: Array.isArray(state.data.sections) ? state.data.sections : [],
-          target_job_title: state.targetJobTitle,
-          job_description: state.jobDescription,
         }),
       });
       state.isNewResume = false;
@@ -1872,77 +2076,6 @@
     }
   }
 
-  function hasTargetJob() {
-    return Boolean((state.targetJobTitle || '').trim() || (state.jobDescription || '').trim());
-  }
-
-  function updateTargetJobBadge() {
-    if (!el.btnTargetJob || !el.targetJobBtnLabel) return;
-    const active = hasTargetJob();
-    el.btnTargetJob.classList.toggle('has-target-job', active);
-    const title = (state.targetJobTitle || '').trim();
-    if (title) {
-      const shortTitle = title.length > 24 ? `${title.slice(0, 22)}...` : title;
-      el.targetJobBtnLabel.textContent = `Target: ${shortTitle}`;
-    } else if ((state.jobDescription || '').trim()) {
-      el.targetJobBtnLabel.textContent = 'Target Job Set';
-    } else {
-      el.targetJobBtnLabel.textContent = 'Target Job';
-    }
-  }
-
-  function openTargetJobModal() {
-    el.inputTargetJobTitle.value = state.targetJobTitle || '';
-    el.inputJobDescription.value = state.jobDescription || '';
-    openModal(el.modalTargetJob);
-    if (window.lucide) lucide.createIcons();
-    el.inputTargetJobTitle.focus();
-  }
-
-  async function persistTargetJob(title, jd) {
-    state.targetJobTitle = (title || '').trim();
-    state.jobDescription = (jd || '').trim();
-    updateTargetJobBadge();
-    renderFullAiQuickChips();
-    if (state.aiOpen) {
-      renderAiContextBar();
-      renderAiQuickChips();
-    }
-
-    if (!state.isNewResume && state.activeResumeId) {
-      await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/target-job`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          target_job_title: state.targetJobTitle,
-          job_description: state.jobDescription,
-        }),
-      });
-    }
-  }
-
-  async function saveTargetJob(e) {
-    e.preventDefault();
-    try {
-      await persistTargetJob(el.inputTargetJobTitle.value, el.inputJobDescription.value);
-      closeModal(el.modalTargetJob);
-      showToast(hasTargetJob() ? 'Target job saved.' : 'Target job cleared.', 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  async function clearTargetJob() {
-    try {
-      el.inputTargetJobTitle.value = '';
-      el.inputJobDescription.value = '';
-      await persistTargetJob('', '');
-      closeModal(el.modalTargetJob);
-      showToast('Target job cleared.', 'success');
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
   function renderAiContextBar() {
     const objs = getAiTargetObjects();
     if (!objs) return;
@@ -1953,13 +2086,9 @@
     const headerBits = [item.role, item.company, item.subtitle].filter(Boolean);
     const entryText = headerBits.length > 0 ? headerBits.join(' — ') : 'General Entry';
     const currentDraft = (detail.text || '').trim();
-    const targetJobLine = hasTargetJob()
-      ? `<div class="ai-context-job">Target Job: ${escapeHtml((state.targetJobTitle || '').trim() || 'Job description attached')}</div>`
-      : '';
 
     el.aiContextBar.innerHTML = `
       <div class="ai-context-entry">${escapeHtml((sec.title || '').toUpperCase())} &bull; ${escapeHtml(entryText)}</div>
-      ${targetJobLine}
       ${currentDraft ? `<div class="ai-context-draft">Current draft: ${escapeHtml(currentDraft)}</div>` : '<div class="ai-context-draft">Empty box &mdash; ready to draft from your notes</div>'}
     `;
   }
@@ -1980,13 +2109,6 @@
           { label: 'Ask me questions to draft this', prompt: 'Ask me 2-3 short questions about what I worked on so we can write this bullet together.' },
           { label: 'Show 3 role examples', prompt: 'Show me 3 realistic example bullets for this role so I can pick a style and customize it.' },
         ];
-
-    if (hasTargetJob()) {
-      chips.unshift({
-        label: 'Align bullet to target job',
-        prompt: 'Rewrite or suggest improvements for this bullet to align with the Target Job Description, strictly using real facts and experience without inventing unconfirmed skills or metrics.',
-      });
-    }
 
     chips.forEach((chip) => {
       const btn = document.createElement('button');
@@ -2043,8 +2165,13 @@
 
       if (msg.content) {
         const bubble = document.createElement('div');
-        bubble.className = 'ai-msg-bubble';
-        bubble.textContent = msg.content;
+        if (msg.role === 'assistant') {
+          bubble.className = 'ai-msg-bubble ai-msg-markdown';
+          bubble.innerHTML = renderMarkdownToSafeHtml(msg.content);
+        } else {
+          bubble.className = 'ai-msg-bubble';
+          bubble.textContent = msg.content;
+        }
         wrap.appendChild(bubble);
       }
 
@@ -2146,8 +2273,6 @@
         method: 'POST',
         body: JSON.stringify({
           mode: 'bullet',
-          target_job_title: state.targetJobTitle,
-          job_description: state.jobDescription,
           context: {
             section_title: sec.title || '',
             role: item.role || '',
@@ -2272,19 +2397,6 @@
           { label: 'I will paste my notes / background', prompt: 'I want to paste my rough background and work history so you can structure it into my resume.' },
         ];
 
-    if (hasTargetJob()) {
-      chips.unshift(
-        {
-          label: 'Analyze match & gaps',
-          prompt: 'Compare my current resume against the Target Job Description. List strong matches, reframing opportunities using truthful phrasing from my real work, and ask concise questions about any missing requirements before changing anything.',
-        },
-        {
-          label: 'Tailor bullets & skills to JD',
-          prompt: 'Tailor my existing skills ordering and bullet phrasing to better match the Target Job Description, strictly using facts already in my resume without inventing new skills or metrics.',
-        },
-      );
-    }
-
     chips.forEach((chip) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -2318,15 +2430,20 @@
 
       if (msg.content) {
         const bubble = document.createElement('div');
-        bubble.className = 'ai-msg-bubble';
-        bubble.textContent = msg.content;
+        if (msg.role === 'assistant') {
+          bubble.className = 'ai-msg-bubble ai-msg-markdown';
+          bubble.innerHTML = renderMarkdownToSafeHtml(msg.content);
+        } else {
+          bubble.className = 'ai-msg-bubble';
+          bubble.textContent = msg.content;
+        }
         wrap.appendChild(bubble);
       }
 
       if (msg.role === 'assistant' && Array.isArray(msg.changes) && msg.changes.length > 0) {
         const banner = document.createElement('div');
         banner.className = 'ai-changes-banner';
-        const itemsHtml = msg.changes.map((c) => `<li>${escapeHtml(c)}</li>`).join('');
+        const itemsHtml = msg.changes.map((c) => `<li>${renderInlineMarkdown(c)}</li>`).join('');
         banner.innerHTML = `
           <div class="ai-changes-title">Applied to Live Resume</div>
           <ul class="ai-changes-list">${itemsHtml}</ul>
@@ -2374,8 +2491,6 @@
         body: JSON.stringify({
           mode: 'full_resume',
           resume_data: resumeSnapshot,
-          target_job_title: state.targetJobTitle,
-          job_description: state.jobDescription,
           messages: apiMessages,
         }),
       });
@@ -2597,7 +2712,7 @@
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode, el.modalTargetJob].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
       }
     });
 
@@ -2608,11 +2723,6 @@
         if (target) closeModal(target);
       });
     });
-
-    // Target Job Modal
-    el.btnTargetJob.addEventListener('click', openTargetJobModal);
-    el.formTargetJob.addEventListener('submit', saveTargetJob);
-    el.btnClearTargetJob.addEventListener('click', clearTargetJob);
 
     // Edit Section Modal
     el.selectSectionFormat.addEventListener('change', updateSectionFormatHint);

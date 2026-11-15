@@ -1488,16 +1488,6 @@ textarea:focus-visible {
   background-color: var(--bg-subtle);
 }
 
-.modal-footer-between {
-  justify-content: space-between;
-}
-
-.modal-footer-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .mono-code {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1653,15 +1643,6 @@ textarea:focus-visible {
   text-overflow: ellipsis;
 }
 
-.ai-context-job {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--blue-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .ai-key-banner {
   padding: 10px 16px;
   background-color: var(--warning-tint);
@@ -1732,6 +1713,122 @@ textarea:focus-visible {
   background-color: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
+}
+
+.ai-msg-bubble.ai-msg-markdown {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.ai-msg-markdown > :first-child {
+  margin-top: 0;
+}
+
+.ai-msg-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-msg-markdown p {
+  margin: 0 0 8px 0;
+}
+
+.ai-msg-markdown .md-heading {
+  margin: 10px 0 6px 0;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.35;
+}
+
+.ai-msg-markdown .md-h1 {
+  font-size: 14px;
+}
+
+.ai-msg-markdown .md-h2,
+.ai-msg-markdown .md-h3 {
+  font-size: 13px;
+}
+
+.ai-msg-markdown ul,
+.ai-msg-markdown ol {
+  margin: 4px 0 8px 0;
+  padding-left: 18px;
+}
+
+.ai-msg-markdown li {
+  margin: 3px 0;
+}
+
+.ai-msg-markdown li > ul,
+.ai-msg-markdown li > ol {
+  margin: 3px 0 4px 0;
+}
+
+.ai-msg-markdown blockquote {
+  margin: 6px 0 8px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--blue-tint-border);
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.ai-msg-markdown .md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 5px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+}
+
+.ai-msg-markdown .md-pre {
+  margin: 6px 0 8px 0;
+  padding: 8px 10px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.ai-msg-markdown hr {
+  border: none;
+  border-top: 1px solid var(--border-default);
+  margin: 10px 0;
+}
+
+.ai-msg-markdown a {
+  color: var(--blue-primary);
+  text-decoration: underline;
+}
+
+.ai-msg-markdown .md-table-wrap {
+  margin: 6px 0 8px 0;
+  overflow-x: auto;
+}
+
+.ai-msg-markdown .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background-color: var(--bg-surface);
+}
+
+.ai-msg-markdown .md-table th,
+.ai-msg-markdown .md-table td {
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ai-msg-markdown .md-table th {
+  background-color: var(--bg-app);
+  font-weight: 600;
 }
 
 .ai-msg-loading {
@@ -1861,29 +1958,6 @@ textarea:focus-visible {
   background-color: var(--bg-subtle);
   border-bottom: 1px solid var(--border-default);
   flex-shrink: 0;
-}
-
-.editor-mode-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-#btnTargetJob.has-target-job {
-  background-color: var(--blue-tint);
-  border-color: var(--blue-tint-border);
-  color: var(--blue-primary);
-}
-
-#btnTargetJob.has-target-job:hover {
-  background-color: var(--blue-tint-border);
-}
-
-.textarea-jd {
-  min-height: 180px;
-  resize: vertical;
-  line-height: 1.5;
 }
 
 .editor-mode-group {

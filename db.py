@@ -137,8 +137,6 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 portfolio TEXT NOT NULL DEFAULT '',
                 linkedin TEXT NOT NULL DEFAULT '',
                 sections_json TEXT NOT NULL DEFAULT '[]',
-                target_job_title TEXT NOT NULL DEFAULT '',
-                job_description TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -161,13 +159,6 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
             );
             """
         )
-
-        # Safe column migration for existing SQLite databases
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(resumes)").fetchall()}
-        if "target_job_title" not in cols:
-            conn.execute("ALTER TABLE resumes ADD COLUMN target_job_title TEXT NOT NULL DEFAULT '';")
-        if "job_description" not in cols:
-            conn.execute("ALTER TABLE resumes ADD COLUMN job_description TEXT NOT NULL DEFAULT '';")
 
     migrate_legacy_json_resumes(db_path=db_path, legacy_dir=legacy_dir)
 
@@ -315,8 +306,6 @@ def list_resumes_db(db_path: Path | None = None) -> list[dict]:
                 "section_count": len(sections),
                 "section_titles": [s.get("title", "") for s in sections if isinstance(s, dict)],
                 "history_count": r["history_count"],
-                "target_job_title": r["target_job_title"] if "target_job_title" in r.keys() else "",
-                "has_job_description": bool((r["job_description"] if "job_description" in r.keys() else "").strip()),
                 "updated_at": r["updated_at"][:16],
             })
         return items
@@ -334,8 +323,6 @@ def get_resume_db(resume_id: int, db_path: Path | None = None) -> dict | None:
         return {
             "id": row["id"],
             "slug": row["slug"],
-            "target_job_title": row["target_job_title"] if "target_job_title" in row.keys() else "",
-            "job_description": row["job_description"] if "job_description" in row.keys() else "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "data": _row_to_resume_dict(row, versions),
@@ -345,8 +332,6 @@ def get_resume_db(resume_id: int, db_path: Path | None = None) -> dict | None:
 def create_resume_db(
     payload: dict,
     initial_label: str = "Initial Draft",
-    target_job_title: str = "",
-    job_description: str = "",
     db_path: Path | None = None,
 ) -> dict:
     clean = _strip_history(payload)
@@ -357,17 +342,12 @@ def create_resume_db(
     slug = make_slug(clean["name"])
     sections_str = json.dumps(clean["sections"])
     snapshot_str = json.dumps(clean)
-    job_title_clean = _clean_str(target_job_title)
-    jd_clean = (job_description or "").strip() if isinstance(job_description, str) else ""
 
     with get_connection(db_path) as conn:
         cur = conn.execute(
             """
-            INSERT INTO resumes (
-                slug, name, phone, email, portfolio, linkedin, sections_json,
-                target_job_title, job_description, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -377,8 +357,6 @@ def create_resume_db(
                 clean["portfolio"],
                 clean["linkedin"],
                 sections_str,
-                job_title_clean,
-                jd_clean,
                 now,
                 now,
             ),
@@ -423,37 +401,8 @@ def duplicate_resume_db(resume_id: int, db_path: Path | None = None) -> dict | N
     return create_resume_db(
         copy_payload,
         initial_label=f"Duplicated from {src_data['name']}",
-        target_job_title=source.get("target_job_title", ""),
-        job_description=source.get("job_description", ""),
         db_path=db_path,
     )
-
-
-def update_target_job_db(
-    resume_id: int,
-    target_job_title: str,
-    job_description: str,
-    db_path: Path | None = None,
-) -> dict | None:
-    """Update the target role and job description attached to a resume."""
-    now = _now_str()
-    clean_title = _clean_str(target_job_title)
-    clean_jd = (job_description or "").strip() if isinstance(job_description, str) else ""
-
-    with get_connection(db_path) as conn:
-        row = conn.execute("SELECT id FROM resumes WHERE id = ?", (resume_id,)).fetchone()
-        if not row:
-            return None
-        conn.execute(
-            """
-            UPDATE resumes
-            SET target_job_title = ?, job_description = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (clean_title, clean_jd, now, resume_id),
-        )
-
-    return get_resume_db(resume_id, db_path=db_path)
 
 
 def _should_record_version(
