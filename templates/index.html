@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Resume Builder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Application Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <i data-lucide="file-text"></i>
+          </div>
+          <span class="brand-name">Resume Builder</span>
+        </div>
+
+        <!-- Shown only in Wizard View -->
+        <div id="wizardTopContext" class="wizard-top-context" hidden>
+          <div class="divider-vertical" aria-hidden="true"></div>
+          <button id="btnBackToDirectory" class="btn btn-ghost btn-sm">
+            <i data-lucide="arrow-left"></i>
+            <span>All Resumes</span>
+          </button>
+          <div class="divider-vertical" aria-hidden="true"></div>
+          <div class="active-file-meta">
+            <span id="activeResumeLabel" class="active-resume-title">New Resume</span>
+            <span id="activeFileBadge" class="mono-code" hidden></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <!-- Directory Mode Toolbar -->
+        <div id="directoryTopActions" class="topbar-actions-group">
+          <button id="btnDirSettings" class="btn btn-secondary btn-sm" title="Application Settings">
+            <i data-lucide="sliders-horizontal"></i>
+            <span>Settings</span>
+          </button>
+          <button id="btnDirNewResume" class="btn btn-primary btn-sm">
+            <i data-lucide="plus"></i>
+            <span>Create New Resume</span>
+          </button>
+        </div>
+
+        <!-- Wizard Mode Toolbar -->
+        <div id="wizardTopActions" class="topbar-actions-group" hidden>
+          <div id="saveStatus" class="status-pill status-saved" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="saveStatusText">Saved</span>
+          </div>
+
+          <button id="btnSave" class="btn btn-secondary btn-sm" title="Save changes (Ctrl/Cmd + S)">
+            <i data-lucide="save"></i>
+            <span>Save</span>
+          </button>
+
+          <button id="btnHistory" class="btn btn-secondary btn-sm" title="Version History">
+            <i data-lucide="history"></i>
+            <span>History</span>
+            <span id="historyBadge" class="badge-count" hidden>0</span>
+          </button>
+
+          <button id="btnWizSettings" class="btn btn-ghost btn-sm" title="Settings" aria-label="Settings">
+            <i data-lucide="sliders-horizontal"></i>
+          </button>
+
+          <div class="divider-vertical" aria-hidden="true"></div>
+
+          <button id="btnExportDocx" class="btn btn-secondary btn-sm" title="Export as Microsoft Word (.docx)">
+            <i data-lucide="file-down"></i>
+            <span>DOCX</span>
+          </button>
+
+          <button id="btnExportPdf" class="btn btn-primary btn-sm" title="Export as PDF">
+            <i data-lucide="download"></i>
+            <span>Export PDF</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- VIEW 1: Resumes Directory -->
+    <main id="directoryView" class="directory-view">
+      <div class="directory-container">
+        <div class="directory-header">
+          <div>
+            <h1 class="directory-title">Resumes</h1>
+            <p class="directory-subtitle">Select a resume to edit in the guided builder, or create a new one from scratch.</p>
+          </div>
+          <div class="directory-search-wrap">
+            <i data-lucide="search" class="search-icon"></i>
+            <label for="resumeSearch" class="sr-only">Filter resumes</label>
+            <input id="resumeSearch" type="search" class="input-control search-input" placeholder="Filter by name or filename..." />
+          </div>
+        </div>
+
+        <div id="directoryEmpty" class="empty-state" hidden>
+          <div class="empty-state-icon">
+            <i data-lucide="folder-open"></i>
+          </div>
+          <h2>No Resumes Found</h2>
+          <p>Create your first structured resume to get started with the guided builder and template generator.</p>
+          <button id="btnEmptyCreate" class="btn btn-primary">
+            <i data-lucide="plus"></i>
+            <span>Create New Resume</span>
+          </button>
+        </div>
+
+        <div id="directoryList" class="directory-table-card" hidden>
+          <div class="directory-table-head">
+            <span>Candidate / File</span>
+            <span>Sections</span>
+            <span>Snapshots</span>
+            <span>Last Modified</span>
+            <span class="text-right">Actions</span>
+          </div>
+          <div id="directoryRows" class="directory-rows"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- VIEW 2: Guided Wizard Workspace -->
+    <div id="wizardView" class="wizard-shell" hidden>
+      <!-- Mobile View Switcher (visible < 1024px) -->
+      <div class="mobile-tabs" role="tablist">
+        <button id="tabEditor" class="mobile-tab active" role="tab" aria-selected="true">Guided Editor</button>
+        <button id="tabPreview" class="mobile-tab" role="tab" aria-selected="false">Document Preview</button>
+      </div>
+
+      <main class="workspace">
+        <!-- Left Pane: Guided Stepper & Focused Stage Editor -->
+        <section id="editorPane" class="pane wizard-pane" aria-label="Guided Resume Wizard">
+          <!-- Stepper Bar -->
+          <nav class="wizard-stepper" aria-label="Wizard Steps">
+            <button type="button" class="step-item active" data-step="1">
+              <span class="step-num">1</span>
+              <span class="step-label">Contact Info</span>
+            </button>
+            <div class="step-connector" aria-hidden="true"></div>
+            <button type="button" class="step-item" data-step="2">
+              <span class="step-num">2</span>
+              <span class="step-label">Sections</span>
+            </button>
+            <div class="step-connector" aria-hidden="true"></div>
+            <button type="button" class="step-item" data-step="3">
+              <span class="step-num">3</span>
+              <span class="step-label">Content</span>
+            </button>
+            <div class="step-connector" aria-hidden="true"></div>
+            <button type="button" class="step-item" data-step="4">
+              <span class="step-num">4</span>
+              <span class="step-label">Review &amp; Export</span>
+            </button>
+          </nav>
+
+          <!-- Stage Container -->
+          <div class="wizard-stage-scroll">
+            <div class="wizard-stage-inner">
+
+              <!-- STAGE 1: Contact Information -->
+              <div id="stage1" class="wizard-stage">
+                <div class="stage-intro">
+                  <h2>Contact Information</h2>
+                  <p>Enter the header contact details displayed at the top of your resume.</p>
+                </div>
+
+                <div class="guidance-box">
+                  <i data-lucide="info" class="guidance-icon"></i>
+                  <div class="guidance-text">
+                    <strong>Formatting Tip:</strong> Optional fields left blank are omitted cleanly without trailing separators. Short URLs (for example <code class="mono-code">github.com/handle</code> without <code class="mono-code">https://</code>) keep the contact line on a single clean row.
+                  </div>
+                </div>
+
+                <section class="editor-card">
+                  <div class="card-body">
+                    <div class="form-grid-2">
+                      <div class="form-field form-field-full">
+                        <label for="fieldName">Full Name <span class="label-required">*</span></label>
+                        <input id="fieldName" type="text" class="input-control" placeholder="e.g. Jane Doe" />
+                      </div>
+                      <div class="form-field">
+                        <label for="fieldPhone">Phone Number</label>
+                        <input id="fieldPhone" type="text" class="input-control" placeholder="e.g. 555-019-8472" />
+                      </div>
+                      <div class="form-field">
+                        <label for="fieldEmail">Email Address</label>
+                        <input id="fieldEmail" type="email" class="input-control" placeholder="e.g. jane.doe@example.com" />
+                      </div>
+                      <div class="form-field">
+                        <label for="fieldPortfolio">Portfolio / GitHub <span class="label-optional">(optional)</span></label>
+                        <input id="fieldPortfolio" type="text" class="input-control" placeholder="e.g. github.com/janedoe" />
+                      </div>
+                      <div class="form-field">
+                        <label for="fieldLinkedin">LinkedIn <span class="label-optional">(optional)</span></label>
+                        <input id="fieldLinkedin" type="text" class="input-control" placeholder="e.g. linkedin.com/in/janedoe" />
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <!-- STAGE 2: Sections Outline -->
+              <div id="stage2" class="wizard-stage" hidden>
+                <div class="stage-intro">
+                  <h2>Organize Sections</h2>
+                  <p>Choose which sections appear on your resume and set their order before filling in entries.</p>
+                </div>
+
+                <div class="guidance-box">
+                  <i data-lucide="info" class="guidance-icon"></i>
+                  <div class="guidance-text">
+                    <strong>Section Types:</strong> Use <strong>Standard</strong> sections for Experience, Education, Projects, or Summary (supports Role, Dates, Subtitles, and Bullets/Prose). Use <strong>Skills</strong> sections for compact Key-Value rows (Category: comma-separated skills).
+                  </div>
+                </div>
+
+                <!-- Quick Add Presets -->
+                <div class="editor-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <i data-lucide="plus-circle" class="card-icon"></i>
+                      <h3 class="card-title">Add Section</h3>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="preset-group">
+                      <span class="preset-label">Common Presets:</span>
+                      <div class="preset-chips">
+                        <button type="button" class="preset-chip" data-preset="PROFESSIONAL SUMMARY" data-skills="false">+ Professional Summary</button>
+                        <button type="button" class="preset-chip" data-preset="EXPERIENCE" data-skills="false">+ Experience</button>
+                        <button type="button" class="preset-chip" data-preset="EDUCATION" data-skills="false">+ Education</button>
+                        <button type="button" class="preset-chip" data-preset="PROJECTS" data-skills="false">+ Projects</button>
+                        <button type="button" class="preset-chip" data-preset="SKILLS" data-skills="true">+ Skills</button>
+                      </div>
+                    </div>
+
+                    <form id="formQuickAddSection" class="custom-section-form">
+                      <div class="form-field flex-grow">
+                        <label for="quickSectionTitle">Custom Section Title</label>
+                        <input id="quickSectionTitle" type="text" class="input-control" placeholder="e.g. CERTIFICATIONS, PUBLICATIONS" />
+                      </div>
+                      <div class="form-field">
+                        <label for="quickSectionType">Format</label>
+                        <select id="quickSectionType" class="select-control select-compact">
+                          <option value="standard">Standard</option>
+                          <option value="skills">Skills (Key-Value)</option>
+                        </select>
+                      </div>
+                      <button type="submit" class="btn btn-secondary btn-align-end">
+                        <i data-lucide="plus"></i>
+                        <span>Add</span>
+                      </button>
+                    </form>
+                  </div>
+                </div>
+
+                <!-- Outline Order List -->
+                <div class="editor-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <i data-lucide="layers" class="card-icon"></i>
+                      <h3 class="card-title">Current Outline</h3>
+                    </div>
+                    <span id="outlineCountLabel" class="field-hint">0 sections</span>
+                  </div>
+                  <div class="card-body">
+                    <div id="outlineList" class="outline-list"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- STAGE 3: Section-by-Section Content -->
+              <div id="stage3" class="wizard-stage" hidden>
+                <div class="stage-intro-row">
+                  <div class="stage-intro">
+                    <h2>Section Content</h2>
+                    <p>Work through each section one at a time. Boxes expand automatically as you write.</p>
+                  </div>
+                </div>
+
+                <div id="stage3Empty" class="empty-inline-card" hidden>
+                  <p>You have not added any sections yet. Add sections in Step 2 to start entering content.</p>
+                  <button type="button" id="btnGoToStep2" class="btn btn-primary btn-sm">
+                    <i data-lucide="arrow-left"></i>
+                    <span>Go to Sections Outline</span>
+                  </button>
+                </div>
+
+                <div id="stage3Content" hidden>
+                  <!-- Section Sub-Navigation -->
+                  <div class="section-switcher-bar">
+                    <div id="sectionTabs" class="section-tabs" role="tablist"></div>
+                    <div class="section-step-arrows">
+                      <button type="button" id="btnPrevSection" class="btn btn-secondary btn-xs">
+                        <i data-lucide="chevron-left"></i>
+                        <span>Prev</span>
+                      </button>
+                      <button type="button" id="btnNextSection" class="btn btn-secondary btn-xs">
+                        <span>Next</span>
+                        <i data-lucide="chevron-right"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Contextual Guidance for Active Section -->
+                  <div id="sectionGuidanceBox" class="guidance-box">
+                    <i data-lucide="lightbulb" class="guidance-icon"></i>
+                    <div id="sectionGuidanceText" class="guidance-text"></div>
+                  </div>
+
+                  <!-- Single Active Section Editor Container -->
+                  <div id="activeSectionContainer"></div>
+                </div>
+              </div>
+
+              <!-- STAGE 4: Review, History & Export -->
+              <div id="stage4" class="wizard-stage" hidden>
+                <div class="stage-intro">
+                  <h2>Review &amp; Export</h2>
+                  <p>Verify document completeness, preview the rendered Microsoft Word PDF, or manage version history.</p>
+                </div>
+
+                <!-- Completeness Preflight Checklist -->
+                <section class="editor-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <i data-lucide="check-square" class="card-icon"></i>
+                      <h3 class="card-title">Document Preflight Check</h3>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <ul id="preflightList" class="preflight-list"></ul>
+                  </div>
+                </section>
+
+                <!-- Export & Verification Card -->
+                <section class="editor-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <i data-lucide="file-output" class="card-icon"></i>
+                      <h3 class="card-title">Save &amp; Export</h3>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <p class="field-hint margin-none">Generate final files formatted identically to <code class="mono-code">Base_Template.docx</code>, or verify layout in the right-hand preview pane.</p>
+                    <div class="export-action-grid">
+                      <button type="button" id="btnStage4Save" class="btn btn-secondary">
+                        <i data-lucide="save"></i>
+                        <span>Save Snapshot</span>
+                      </button>
+                      <button type="button" id="btnStage4PreviewPdf" class="btn btn-secondary">
+                        <i data-lucide="eye"></i>
+                        <span>Render Word PDF Preview</span>
+                      </button>
+                      <button type="button" id="btnStage4Docx" class="btn btn-secondary">
+                        <i data-lucide="file-down"></i>
+                        <span>Download DOCX</span>
+                      </button>
+                      <button type="button" id="btnStage4Pdf" class="btn btn-primary">
+                        <i data-lucide="download"></i>
+                        <span>Download PDF</span>
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <!-- Inline Version History Preview -->
+                <section class="editor-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <i data-lucide="history" class="card-icon"></i>
+                      <h3 class="card-title">Version History</h3>
+                    </div>
+                    <button type="button" id="btnStage4OpenHistory" class="btn btn-ghost btn-xs">Open Full History</button>
+                  </div>
+                  <div class="card-body">
+                    <div id="stage4HistoryPreview" class="history-list"></div>
+                  </div>
+                </section>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- Sticky Wizard Footer Navigation -->
+          <footer class="wizard-footer">
+            <button type="button" id="btnWizardPrev" class="btn btn-secondary">
+              <i data-lucide="arrow-left"></i>
+              <span>Back</span>
+            </button>
+            <span id="wizardStepIndicator" class="wizard-step-indicator">Step 1 of 4</span>
+            <button type="button" id="btnWizardNext" class="btn btn-primary">
+              <span>Next Step</span>
+              <i data-lucide="arrow-right"></i>
+            </button>
+          </footer>
+        </section>
+
+        <!-- Right Pane: Live Document Preview -->
+        <section id="previewPane" class="pane preview-pane mobile-hidden" aria-label="Document Preview">
+          <div class="preview-toolbar">
+            <div class="segmented-control" role="group" aria-label="Preview Mode">
+              <button id="modeLiveHtml" class="segmented-btn active">Live Layout</button>
+              <button id="modeNativePdf" class="segmented-btn">Word PDF Render</button>
+            </div>
+
+            <div class="preview-controls">
+              <button id="btnRefreshPdf" class="btn btn-secondary btn-xs" hidden>
+                <i data-lucide="refresh-cw"></i>
+                <span>Refresh PDF</span>
+              </button>
+              <div id="zoomControls" class="zoom-group">
+                <button id="btnZoomOut" class="btn btn-ghost btn-xs" title="Zoom out" aria-label="Zoom out">
+                  <i data-lucide="minus"></i>
+                </button>
+                <span id="zoomLabel" class="zoom-value">85%</span>
+                <button id="btnZoomIn" class="btn btn-ghost btn-xs" title="Zoom in" aria-label="Zoom in">
+                  <i data-lucide="plus"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="preview-viewport">
+            <!-- HTML Paper Preview -->
+            <div id="livePaperWrapper" class="paper-wrapper">
+              <article id="resumePaper" class="resume-paper" aria-label="Live Resume Paper Preview"></article>
+            </div>
+
+            <!-- Native PDF Embed Preview -->
+            <div id="pdfPreviewWrapper" class="pdf-wrapper" hidden>
+              <div id="pdfLoadingState" class="pdf-loading" hidden>
+                <div class="spinner"></div>
+                <p>Generating Word PDF preview...</p>
+              </div>
+              <iframe id="pdfFrame" class="pdf-frame" title="Rendered Resume PDF"></iframe>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Modal: Rename Section -->
+  <div id="modalSectionTitle" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalSectionTitleHeading">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 id="modalSectionTitleHeading">Rename Section</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalSectionTitle" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <form id="formSectionTitle">
+        <div class="modal-body">
+          <div class="form-field">
+            <label for="inputSectionTitle">Section Title</label>
+            <input id="inputSectionTitle" type="text" class="input-control" required placeholder="e.g. EXPERIENCE, EDUCATION" />
+            <p class="field-hint">Titles are formatted in uppercase on the final document.</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close="modalSectionTitle">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Title</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Delete Resume Confirmation -->
+  <div id="modalDeleteResume" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalDeleteTitle">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 id="modalDeleteTitle">Delete Resume</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalDeleteResume" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <form id="formDeleteResume">
+        <div class="modal-body">
+          <p class="danger-warning">This action permanently removes the JSON file from disk and cannot be undone.</p>
+          <div class="form-field">
+            <label for="confirmDeleteInput">Type <code id="deleteTargetName" class="mono-code"></code> to confirm:</label>
+            <input id="confirmDeleteInput" type="text" class="input-control" autocomplete="off" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close="modalDeleteResume">Cancel</button>
+          <button type="submit" id="btnConfirmDeleteResume" class="btn btn-danger" disabled>Delete Permanently</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Version History -->
+  <div id="modalHistory" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalHistoryTitle">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="modalHistoryTitle">Version History</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalHistory" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body modal-scroll">
+        <p class="modal-description">Snapshots are recorded automatically whenever you save changes to a resume.</p>
+        <div id="historyList" class="history-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalHistory">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Settings / API Keys -->
+  <div id="modalSettings" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalSettingsTitle">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 id="modalSettingsTitle">Application Settings</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalSettings" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <form id="formSettings">
+        <div class="modal-body">
+          <p class="modal-description">Configure optional provider API keys stored locally in <code class="mono-code">settings.json</code>.</p>
+          <div class="form-stack">
+            <div class="form-field">
+              <label for="keyOpenAI">OpenAI API Key</label>
+              <input id="keyOpenAI" type="password" class="input-control" placeholder="sk-..." autocomplete="off" />
+            </div>
+            <div class="form-field">
+              <label for="keyGemini">Gemini API Key</label>
+              <input id="keyGemini" type="password" class="input-control" placeholder="AIza..." autocomplete="off" />
+            </div>
+            <div class="form-field">
+              <label for="keyClaude">Claude API Key</label>
+              <input id="keyClaude" type="password" class="input-control" placeholder="sk-ant-..." autocomplete="off" />
+            </div>
+            <div class="form-field">
+              <label for="keyOther">Other API Key</label>
+              <input id="keyOther" type="password" class="input-control" placeholder="Custom key..." autocomplete="off" />
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close="modalSettings">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
