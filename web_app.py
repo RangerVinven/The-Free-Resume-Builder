@@ -104,14 +104,15 @@ def create_resume_api():
     if filepath.exists():
         return jsonify({"error": f"A resume named '{filename}' already exists."}), 409
 
-    data = {
+    raw_sections = payload.get("sections")
+    data = normalize_resume_schema({
         "name": name,
         "phone": (payload.get("phone") or "").strip(),
         "email": (payload.get("email") or "").strip(),
         "portfolio": (payload.get("portfolio") or "").strip(),
         "linkedin": (payload.get("linkedin") or "").strip(),
-        "sections": [],
-    }
+        "sections": raw_sections if isinstance(raw_sections, list) else [],
+    })
     save_resume(filepath, data)
     return jsonify({"filename": filename, "data": data}), 201
 
@@ -349,6 +350,142 @@ def build_bullet_system_prompt(context: dict) -> str:
     )
 
 
+def _clean_str(val) -> str:
+    return val.strip() if isinstance(val, str) else (str(val).strip() if val is not None else "")
+
+
+def normalize_resume_schema(raw_data: dict, existing_data: dict = None) -> dict:
+    """Coerce an AI-produced or partial resume dict into the strict Base_Template schema."""
+    src = raw_data if isinstance(raw_data, dict) else {}
+    normalized = {
+        "name": _clean_str(src.get("name")),
+        "phone": _clean_str(src.get("phone")),
+        "email": _clean_str(src.get("email")),
+        "portfolio": _clean_str(src.get("portfolio")),
+        "linkedin": _clean_str(src.get("linkedin")),
+        "sections": [],
+    }
+
+    raw_sections = src.get("sections")
+    if isinstance(raw_sections, list):
+        for sec in raw_sections:
+            if not isinstance(sec, dict):
+                continue
+            title = _clean_str(sec.get("title")).upper()
+            if not title:
+                continue
+            is_skills = bool(sec.get("is_skills", False))
+            raw_items = sec.get("items") if isinstance(sec.get("items"), list) else []
+            clean_items = []
+            if is_skills:
+                for it in raw_items:
+                    if not isinstance(it, dict):
+                        continue
+                    cat = _clean_str(it.get("category"))
+                    txt = _clean_str(it.get("text"))
+                    if cat or txt:
+                        clean_items.append({"category": cat, "text": txt})
+            else:
+                for it in raw_items:
+                    if not isinstance(it, dict):
+                        continue
+                    raw_details = it.get("details") if isinstance(it.get("details"), list) else []
+                    clean_details = []
+                    for d in raw_details:
+                        if isinstance(d, dict):
+                            d_txt = _clean_str(d.get("text"))
+                            if d_txt:
+                                clean_details.append({
+                                    "is_bullet": bool(d.get("is_bullet", True)),
+                                    "text": d_txt,
+                                })
+                        elif isinstance(d, str) and d.strip():
+                            clean_details.append({"is_bullet": True, "text": d.strip()})
+
+                    item_obj = {
+                        "role": _clean_str(it.get("role")),
+                        "company": _clean_str(it.get("company")),
+                        "location": _clean_str(it.get("location")),
+                        "date": _clean_str(it.get("date")),
+                        "subtitle": _clean_str(it.get("subtitle")),
+                        "subtitle_right": _clean_str(it.get("subtitle_right")),
+                        "details": clean_details,
+                    }
+                    if any(item_obj[k] for k in ("role", "company", "location", "date", "subtitle", "subtitle_right")) or clean_details:
+                        clean_items.append(item_obj)
+            normalized["sections"].append({
+                "title": title,
+                "is_skills": is_skills,
+                "items": clean_items,
+            })
+
+    if isinstance(existing_data, dict) and "_history" in existing_data:
+        normalized["_history"] = existing_data["_history"]
+
+    return normalized
+
+
+def build_full_resume_system_prompt(resume_data: dict) -> str:
+    """Build the system prompt for conversational full-resume construction."""
+    snapshot = normalize_resume_schema(resume_data or {})
+    snapshot.pop("_history", None)
+    snapshot_json = json.dumps(snapshot, indent=2)
+
+    return (
+        "You are an expert, practical resume architect collaborating step-by-step with the user to build "
+        "or refine their complete resume.\n\n"
+        f"Current Resume JSON State:\n```json\n{snapshot_json}\n```\n\n"
+        "Exact Target Schema for `updated_resume`:\n"
+        "{\n"
+        '  "name": "Full Name",\n'
+        '  "phone": "...",\n'
+        '  "email": "...",\n'
+        '  "portfolio": "...",\n'
+        '  "linkedin": "...",\n'
+        '  "sections": [\n'
+        "    {\n"
+        '      "title": "UPPERCASE SECTION TITLE (e.g. EXPERIENCE, EDUCATION, PROJECTS, SKILLS)",\n'
+        '      "is_skills": false,\n'
+        '      "items": [\n'
+        "        {\n"
+        '          "role": "Primary Role, Degree, or Project Name",\n'
+        '          "company": "Organization / University",\n'
+        '          "location": "City, State",\n'
+        '          "date": "May 2023 - Present",\n'
+        '          "subtitle": "Optional secondary left metadata (e.g., Coursework, GPA)",\n'
+        '          "subtitle_right": "Optional secondary right metadata",\n'
+        '          "details": [\n'
+        '            {"is_bullet": true, "text": "Clean bullet text without leading symbol"}\n'
+        "          ]\n"
+        "        }\n"
+        "      ]\n"
+        "    },\n"
+        "    {\n"
+        '      "title": "TECHNICAL SKILLS",\n'
+        '      "is_skills": true,\n'
+        '      "items": [\n'
+        '        {"category": "Languages", "text": "Python, TypeScript, SQL"}\n'
+        "      ]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Guidelines:\n"
+        "1. Never fabricate employers, degrees, dates, projects, technologies, or metrics the user has not provided.\n"
+        "2. Whenever the user shares facts (name, contact info, education, roles, projects, bullet ideas, or skills), "
+        "incorporate them into `updated_resume` right away while preserving ALL existing resume data they did not ask to remove.\n"
+        "3. Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for standard entries.\n"
+        "4. Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
+        "5. If more details are needed for a section (or if starting from scratch), ask 2 to 4 focused, helpful questions "
+        "in `reply` about what to add next (e.g. target role, work history, education, or skills).\n"
+        "6. You MUST respond strictly with a JSON object matching:\n"
+        "{\n"
+        '  "reply": "Conversational response summarizing what you updated and/or asking clear next questions.",\n'
+        '  "changes_summary": ["Short bullet describing each change applied to the resume, or empty array [] if none"],\n'
+        '  "updated_resume": <full updated resume object matching the schema above, or null if no resume fields changed>\n'
+        "}"
+    )
+
+
 def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
     """Call OpenAI Chat Completions API with JSON response_format."""
     api_messages = [{"role": "system", "content": system_prompt}]
@@ -410,7 +547,21 @@ def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: lis
                     "label": (s.get("label") or "Option").strip(),
                     "text": s["text"].strip(),
                 })
-    return {"reply": reply, "suggestions": clean_suggestions}
+    changes_summary = []
+    raw_changes = parsed.get("changes_summary")
+    if isinstance(raw_changes, list):
+        changes_summary = [_clean_str(c) for c in raw_changes if _clean_str(c)]
+
+    updated_resume = parsed.get("updated_resume")
+    if not isinstance(updated_resume, dict):
+        updated_resume = None
+
+    return {
+        "reply": reply,
+        "suggestions": clean_suggestions,
+        "updated_resume": updated_resume,
+        "changes_summary": changes_summary,
+    }
 
 
 @app.route("/api/ai/assist", methods=["POST"])
@@ -420,7 +571,7 @@ def ai_assist_api():
     context = payload.get("context") or {}
     messages = payload.get("messages") or []
 
-    if mode != "bullet":
+    if mode not in ("bullet", "full_resume"):
         return jsonify({"error": f"Unsupported assistant mode: {mode}"}), 400
 
     settings = load_settings()
@@ -436,18 +587,34 @@ def ai_assist_api():
     if not api_key:
         return jsonify({"error": "No OpenAI API key configured. Open Settings to add your key."}), 400
 
-    if not messages:
-        messages = [{"role": "user", "content": "Help me draft this resume item. Ask me clarifying questions about what I did if needed."}]
+    if mode == "full_resume":
+        existing_resume = payload.get("resume_data") or {}
+        if not messages:
+            messages = [{"role": "user", "content": "Let's build or refine my resume. Ask me what I'd like to include."}]
+        system_prompt = build_full_resume_system_prompt(existing_resume)
+    else:
+        if not messages:
+            messages = [{"role": "user", "content": "Help me draft this resume item. Ask me clarifying questions about what I did if needed."}]
+        system_prompt = build_bullet_system_prompt(context)
 
-    system_prompt = build_bullet_system_prompt(context)
     try:
         result = call_openai_chat(api_key, model, system_prompt, messages)
-        return jsonify({
+        response_body = {
             "reply": result["reply"],
             "suggestions": result["suggestions"],
             "provider": provider,
             "model": model,
-        })
+        }
+        if mode == "full_resume":
+            existing_resume = payload.get("resume_data") or {}
+            normalized = (
+                normalize_resume_schema(result["updated_resume"], existing_resume)
+                if result["updated_resume"] is not None
+                else None
+            )
+            response_body["updated_resume"] = normalized
+            response_body["changes_summary"] = result["changes_summary"]
+        return jsonify(response_body)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

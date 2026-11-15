@@ -22,6 +22,10 @@
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasOpenAIKey: false },
+    editorMode: 'manual', // 'manual' | 'ai'
+    fullAiMessages: [], // { role: 'user'|'assistant', content: string, changes?: string[] }
+    fullAiLoading: false,
+    lastAiUndoState: null, // deep copy of resume data prior to latest AI edit
   };
 
   // DOM Elements
@@ -54,6 +58,12 @@
 
     // Wizard View
     wizardView: document.getElementById('wizardView'),
+    modeManualEditor: document.getElementById('modeManualEditor'),
+    modeAiBuilder: document.getElementById('modeAiBuilder'),
+    btnToggleEditorMode: document.getElementById('btnToggleEditorMode'),
+    toggleEditorModeLabel: document.getElementById('toggleEditorModeLabel'),
+    manualEditorView: document.getElementById('manualEditorView'),
+    aiBuilderView: document.getElementById('aiBuilderView'),
     stepButtons: Array.from(document.querySelectorAll('.wizard-stepper .step-item')),
     stages: {
       1: document.getElementById('stage1'),
@@ -143,6 +153,22 @@
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
+
+    modalCreateMode: document.getElementById('modalCreateMode'),
+    btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
+    btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
+
+    // Full-Resume AI Builder View
+    fullAiModelBadge: document.getElementById('fullAiModelBadge'),
+    btnFullAiUndo: document.getElementById('btnFullAiUndo'),
+    btnFullAiReset: document.getElementById('btnFullAiReset'),
+    fullAiNoKeyBanner: document.getElementById('fullAiNoKeyBanner'),
+    btnFullAiOpenSettings: document.getElementById('btnFullAiOpenSettings'),
+    fullAiMessages: document.getElementById('fullAiMessages'),
+    fullAiQuickChips: document.getElementById('fullAiQuickChips'),
+    fullAiComposerForm: document.getElementById('fullAiComposerForm'),
+    fullAiInput: document.getElementById('fullAiInput'),
+    btnFullAiSend: document.getElementById('btnFullAiSend'),
 
     // Writing Assistant Drawer
     aiDrawer: document.getElementById('aiDrawer'),
@@ -255,6 +281,10 @@
     state.isDirty = false;
     state.aiOpen = false;
     state.aiTarget = null;
+    state.editorMode = 'manual';
+    state.fullAiMessages = [];
+    state.fullAiLoading = false;
+    state.lastAiUndoState = null;
     el.aiDrawer.hidden = true;
 
     el.directoryView.hidden = false;
@@ -266,7 +296,7 @@
     await loadResumeList();
   }
 
-  function enterWizardView() {
+  function enterWizardView(initialMode = 'manual') {
     state.view = 'wizard';
     el.directoryView.hidden = true;
     el.wizardView.hidden = false;
@@ -280,6 +310,7 @@
     bindContactFields();
     renderWizardStep();
     renderPreview();
+    setEditorMode(initialMode);
   }
 
   function updateWizardHeaderMeta() {
@@ -446,11 +477,18 @@
     URL.revokeObjectURL(url);
   }
 
-  function startNewResumeWizard() {
+  function openCreateModeModal() {
+    openModal(el.modalCreateMode);
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function startNewResumeWizard(initialMode = 'manual') {
     state.isNewResume = true;
     state.activeFilename = null;
     state.wizardStep = 1;
     state.activeSectionIdx = 0;
+    state.fullAiMessages = [];
+    state.lastAiUndoState = null;
     state.data = {
       name: '',
       phone: '',
@@ -460,8 +498,10 @@
       sections: [],
     };
     setDirty(true);
-    enterWizardView();
-    el.fieldName.focus();
+    enterWizardView(initialMode);
+    if (initialMode === 'manual') {
+      el.fieldName.focus();
+    }
   }
 
   async function openExistingResumeInWizard(filename, startStep = 1) {
@@ -538,8 +578,10 @@
   async function createDraftResumeOnServer() {
     const name = (state.data.name || '').trim();
     if (!name) {
-      showToast('Please enter a Full Name before continuing.', 'error');
-      el.fieldName.focus();
+      showToast('Please enter a Full Name (or tell the AI your name) before saving.', 'error');
+      if (state.editorMode === 'manual') {
+        el.fieldName.focus();
+      }
       return false;
     }
     try {
@@ -551,6 +593,7 @@
           email: state.data.email,
           portfolio: state.data.portfolio,
           linkedin: state.data.linkedin,
+          sections: Array.isArray(state.data.sections) ? state.data.sections : [],
         }),
       });
       state.isNewResume = false;
@@ -1584,8 +1627,11 @@
     } catch {
       // Leave existing config on transient failure
     }
-    el.aiModelBadge.textContent = state.aiConfig.model || 'gpt-4o-mini';
+    const activeModel = state.aiConfig.model || 'gpt-4o-mini';
+    el.aiModelBadge.textContent = activeModel;
     el.aiKeyMissingBanner.hidden = state.aiConfig.hasOpenAIKey;
+    el.fullAiModelBadge.textContent = activeModel;
+    el.fullAiNoKeyBanner.hidden = state.aiConfig.hasOpenAIKey;
   }
 
   function renderAiContextBar() {
@@ -1847,9 +1893,207 @@
     if (window.innerWidth < 1024) {
       el.tabEditor.click();
     }
-    if (state.view === 'wizard' && state.wizardStep === 3) {
+    if (state.view === 'wizard' && state.editorMode === 'manual' && state.wizardStep === 3) {
       renderStage3Content();
     }
+  }
+
+  // =========================================================
+  // FULL-RESUME CONVERSATIONAL AI BUILDER & MODE SWITCHING
+  // =========================================================
+  async function setEditorMode(mode) {
+    state.editorMode = mode === 'ai' ? 'ai' : 'manual';
+    const isAi = state.editorMode === 'ai';
+
+    el.modeManualEditor.classList.toggle('active', !isAi);
+    el.modeManualEditor.setAttribute('aria-selected', String(!isAi));
+    el.modeAiBuilder.classList.toggle('active', isAi);
+    el.modeAiBuilder.setAttribute('aria-selected', String(isAi));
+    el.toggleEditorModeLabel.textContent = isAi ? 'Switch to Manual Editor' : 'Switch to AI Builder';
+
+    el.manualEditorView.hidden = isAi;
+    el.aiBuilderView.hidden = !isAi;
+
+    if (isAi) {
+      if (state.aiOpen) closeAiDrawer();
+      await refreshAiSettingsStatus();
+      renderFullAiThread();
+      renderFullAiQuickChips();
+      el.btnFullAiUndo.hidden = !state.lastAiUndoState;
+      if (window.lucide) lucide.createIcons();
+      el.fullAiInput.focus();
+    } else {
+      // Sync any AI updates into Manual Wizard stages cleanly
+      if (state.activeSectionIdx >= (state.data?.sections?.length || 0)) {
+        state.activeSectionIdx = Math.max(0, (state.data?.sections?.length || 1) - 1);
+      }
+      bindContactFields();
+      renderWizardStep();
+      renderPreview();
+      if (window.lucide) lucide.createIcons();
+    }
+  }
+
+  function renderFullAiQuickChips() {
+    el.fullAiQuickChips.innerHTML = '';
+    if (state.fullAiLoading) return;
+
+    const hasContent = Boolean((state.data?.name || '').trim() || (state.data?.sections || []).length > 0);
+    const chips = hasContent
+      ? [
+          { label: 'Review & suggest improvements', prompt: 'Review my current resume and suggest concrete improvements or missing sections.' },
+          { label: 'Add a new experience or project', prompt: 'Ask me a few quick questions to add a new role or project to my resume.' },
+          { label: 'Organize or tighten skills', prompt: 'Help organize or refine my technical skills section.' },
+        ]
+      : [
+          { label: 'Walk me through step by step', prompt: 'Start from the beginning and ask me a few clear questions (name, contact info, target role, education, experience) to build my resume.' },
+          { label: 'I will paste my notes / background', prompt: 'I want to paste my rough background and work history so you can structure it into my resume.' },
+        ];
+
+    chips.forEach((chip) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ai-quick-chip';
+      btn.textContent = chip.label;
+      btn.addEventListener('click', () => sendFullAiMessage(chip.prompt));
+      el.fullAiQuickChips.appendChild(btn);
+    });
+  }
+
+  function renderFullAiThread() {
+    el.fullAiMessages.innerHTML = '';
+
+    if (state.fullAiMessages.length === 0) {
+      const welcome = document.createElement('div');
+      welcome.className = 'ai-msg ai-msg-assistant';
+      const hasExisting = Boolean((state.data?.name || '').trim() || (state.data?.sections || []).length > 0);
+      welcome.innerHTML = `
+        <div class="ai-msg-bubble">${
+          hasExisting
+            ? 'Your current resume is loaded. Tell me what you would like to add, rewrite, or reorganize—or switch back to the Manual Wizard anytime.'
+            : 'Describe your background, target role, work history, education, and skills in your own words. I will populate your resume structure live on the right as we go, and you can switch to the Manual Wizard anytime.'
+        }</div>
+      `;
+      el.fullAiMessages.appendChild(welcome);
+    }
+
+    state.fullAiMessages.forEach((msg) => {
+      const wrap = document.createElement('div');
+      wrap.className = `ai-msg ai-msg-${msg.role}`;
+
+      if (msg.content) {
+        const bubble = document.createElement('div');
+        bubble.className = 'ai-msg-bubble';
+        bubble.textContent = msg.content;
+        wrap.appendChild(bubble);
+      }
+
+      if (msg.role === 'assistant' && Array.isArray(msg.changes) && msg.changes.length > 0) {
+        const banner = document.createElement('div');
+        banner.className = 'ai-changes-banner';
+        const itemsHtml = msg.changes.map((c) => `<li>${escapeHtml(c)}</li>`).join('');
+        banner.innerHTML = `
+          <div class="ai-changes-title">Applied to Live Resume</div>
+          <ul class="ai-changes-list">${itemsHtml}</ul>
+        `;
+        wrap.appendChild(banner);
+      }
+
+      el.fullAiMessages.appendChild(wrap);
+    });
+
+    if (state.fullAiLoading) {
+      const loading = document.createElement('div');
+      loading.className = 'ai-msg ai-msg-assistant';
+      loading.innerHTML = '<div class="ai-msg-bubble ai-msg-loading">Updating resume draft...</div>';
+      el.fullAiMessages.appendChild(loading);
+    }
+
+    el.fullAiMessages.scrollTop = el.fullAiMessages.scrollHeight;
+  }
+
+  async function sendFullAiMessage(rawText) {
+    if (state.fullAiLoading || !state.data) return;
+    const text = (rawText || '').trim();
+    if (!text) return;
+
+    state.fullAiMessages.push({ role: 'user', content: text });
+    el.fullAiInput.value = '';
+    autoResizeTextarea(el.fullAiInput);
+    state.fullAiLoading = true;
+    el.btnFullAiSend.disabled = true;
+    renderFullAiThread();
+    renderFullAiQuickChips();
+
+    const apiMessages = state.fullAiMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    try {
+      const resumeSnapshot = { ...state.data };
+      delete resumeSnapshot._history;
+
+      const res = await fetchJson('/api/ai/assist', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'full_resume',
+          resume_data: resumeSnapshot,
+          messages: apiMessages,
+        }),
+      });
+
+      if (res.updated_resume && typeof res.updated_resume === 'object') {
+        state.lastAiUndoState = JSON.parse(JSON.stringify(state.data));
+        const preservedHistory = state.data._history;
+        state.data = res.updated_resume;
+        if (preservedHistory !== undefined) {
+          state.data._history = preservedHistory;
+        }
+        el.btnFullAiUndo.hidden = false;
+        setDirty(true);
+        updateWizardHeaderMeta();
+        bindContactFields();
+        renderPreview();
+      }
+
+      state.fullAiMessages.push({
+        role: 'assistant',
+        content: res.reply || 'Updated your resume.',
+        changes: Array.isArray(res.changes_summary) ? res.changes_summary : [],
+      });
+    } catch (err) {
+      state.fullAiMessages.push({
+        role: 'assistant',
+        content: `Error: ${err.message}`,
+        changes: [],
+      });
+    } finally {
+      state.fullAiLoading = false;
+      el.btnFullAiSend.disabled = false;
+      renderFullAiThread();
+      renderFullAiQuickChips();
+      el.fullAiInput.focus();
+    }
+  }
+
+  function undoLastFullAiChange() {
+    if (!state.lastAiUndoState) return;
+    state.data = state.lastAiUndoState;
+    state.lastAiUndoState = null;
+    el.btnFullAiUndo.hidden = true;
+    setDirty(true);
+    updateWizardHeaderMeta();
+    bindContactFields();
+    renderPreview();
+    showToast('Reverted the last AI resume update.', 'success');
+  }
+
+  function resetFullAiConversation() {
+    state.fullAiMessages = [];
+    renderFullAiThread();
+    renderFullAiQuickChips();
+    el.fullAiInput.focus();
   }
 
   async function openSettingsModal() {
@@ -1878,8 +2122,21 @@
       state.searchQuery = e.target.value;
       renderDirectory();
     });
-    el.btnDirNewResume.addEventListener('click', startNewResumeWizard);
-    el.btnEmptyCreate.addEventListener('click', startNewResumeWizard);
+    el.btnDirNewResume.addEventListener('click', openCreateModeModal);
+    el.btnEmptyCreate.addEventListener('click', openCreateModeModal);
+    el.btnChooseManualCreate.addEventListener('click', () => {
+      closeModal(el.modalCreateMode);
+      startNewResumeWizard('manual');
+    });
+    el.btnChooseAiCreate.addEventListener('click', () => {
+      closeModal(el.modalCreateMode);
+      startNewResumeWizard('ai');
+    });
+    el.modeManualEditor.addEventListener('click', () => setEditorMode('manual'));
+    el.modeAiBuilder.addEventListener('click', () => setEditorMode('ai'));
+    el.btnToggleEditorMode.addEventListener('click', () => {
+      setEditorMode(state.editorMode === 'ai' ? 'manual' : 'ai');
+    });
     el.btnDirSettings.addEventListener('click', openSettingsModal);
     el.btnWizSettings.addEventListener('click', openSettingsModal);
     el.btnBackToDirectory.addEventListener('click', showDirectoryView);
@@ -2054,13 +2311,30 @@
         });
         closeModal(el.modalSettings);
         showToast('Settings saved.', 'success');
-        if (state.aiOpen) {
+        if (state.aiOpen || state.editorMode === 'ai') {
           await refreshAiSettingsStatus();
-          renderAiQuickChips();
+          if (state.aiOpen) renderAiQuickChips();
+          if (state.editorMode === 'ai') renderFullAiQuickChips();
         }
       } catch (err) {
         showToast(err.message, 'error');
       }
+    });
+
+    // Full-Resume AI Builder Composer
+    el.btnFullAiUndo.addEventListener('click', undoLastFullAiChange);
+    el.btnFullAiReset.addEventListener('click', resetFullAiConversation);
+    el.btnFullAiOpenSettings.addEventListener('click', openSettingsModal);
+    el.fullAiInput.addEventListener('input', () => autoResizeTextarea(el.fullAiInput));
+    el.fullAiInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendFullAiMessage(el.fullAiInput.value);
+      }
+    });
+    el.fullAiComposerForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendFullAiMessage(el.fullAiInput.value);
     });
 
     // Writing Assistant Drawer

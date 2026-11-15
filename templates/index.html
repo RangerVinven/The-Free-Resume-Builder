@@ -136,10 +136,28 @@
       </div>
 
       <main class="workspace">
-        <!-- Left Pane: Guided Stepper & Focused Stage Editor -->
-        <section id="editorPane" class="pane wizard-pane" aria-label="Guided Resume Wizard">
-          <!-- Stepper Bar -->
-          <nav class="wizard-stepper" aria-label="Wizard Steps">
+        <!-- Left Pane: Editor (Manual Guided Wizard <-> AI Resume Builder) -->
+        <section id="editorPane" class="pane wizard-pane" aria-label="Resume Editor">
+          <div class="editor-mode-bar">
+            <div class="editor-mode-group" role="tablist" aria-label="Editor Mode">
+              <button type="button" id="modeManualEditor" class="editor-mode-tab active" role="tab" aria-selected="true">
+                <i data-lucide="list-checks"></i>
+                <span>Manual Wizard</span>
+              </button>
+              <button type="button" id="modeAiBuilder" class="editor-mode-tab" role="tab" aria-selected="false">
+                <i data-lucide="bot"></i>
+                <span>AI Builder</span>
+              </button>
+            </div>
+            <button type="button" id="btnToggleEditorMode" class="btn btn-secondary btn-xs" title="Switch between Manual Wizard and AI Builder">
+              <i data-lucide="arrow-left-right"></i>
+              <span id="toggleEditorModeLabel">Switch to AI Builder</span>
+            </button>
+          </div>
+
+          <div id="manualEditorView" class="editor-mode-view">
+            <!-- Stepper Bar -->
+            <nav class="wizard-stepper" aria-label="Wizard Steps">
             <button type="button" class="step-item active" data-step="1">
               <span class="step-num">1</span>
               <span class="step-label">Contact Info</span>
@@ -396,11 +414,59 @@
               <span>Back</span>
             </button>
             <span id="wizardStepIndicator" class="wizard-step-indicator">Step 1 of 4</span>
-            <button type="button" id="btnWizardNext" class="btn btn-primary">
-              <span>Next Step</span>
-              <i data-lucide="arrow-right"></i>
-            </button>
-          </footer>
+              <button type="button" id="btnWizardNext" class="btn btn-primary">
+                <span>Next Step</span>
+                <i data-lucide="arrow-right"></i>
+              </button>
+            </footer>
+          </div>
+
+          <!-- Full-Resume Conversational AI Builder View -->
+          <div id="aiBuilderView" class="editor-mode-view ai-builder-view" hidden>
+            <div class="ai-builder-subbar">
+              <div class="ai-builder-title-wrap">
+                <span class="ai-builder-heading">Conversational Resume Builder</span>
+                <span id="fullAiModelBadge" class="mono-code">OpenAI</span>
+              </div>
+              <div class="ai-builder-actions">
+                <button type="button" id="btnFullAiUndo" class="btn btn-ghost btn-xs" title="Undo last AI edit" hidden>
+                  <i data-lucide="undo-2"></i>
+                  <span>Undo Last Edit</span>
+                </button>
+                <button type="button" id="btnFullAiReset" class="btn btn-ghost btn-xs" title="Start a fresh conversation">
+                  <i data-lucide="rotate-ccw"></i>
+                  <span>New Chat</span>
+                </button>
+              </div>
+            </div>
+
+            <div id="fullAiNoKeyBanner" class="ai-key-banner" hidden>
+              <div class="ai-key-banner-text">
+                <i data-lucide="alert-circle" class="ai-banner-icon"></i>
+                <span>No OpenAI API key is configured. Add your key in Settings to use the AI Builder.</span>
+              </div>
+              <button type="button" id="btnFullAiOpenSettings" class="btn btn-secondary btn-xs">Open Settings</button>
+            </div>
+
+            <div id="fullAiMessages" class="ai-chat-thread ai-builder-thread" aria-live="polite"></div>
+
+            <div class="ai-drawer-footer">
+              <div id="fullAiQuickChips" class="ai-quick-chips"></div>
+              <form id="fullAiComposerForm" class="ai-composer-form">
+                <label for="fullAiInput" class="sr-only">Describe your background or ask the AI to update your resume</label>
+                <textarea
+                  id="fullAiInput"
+                  class="textarea-control ai-input"
+                  rows="1"
+                  placeholder="Tell the AI your background, target role, experience, or ask to edit a section..."
+                ></textarea>
+                <button type="submit" id="btnFullAiSend" class="btn btn-primary btn-sm ai-send-btn">
+                  <i data-lucide="send"></i>
+                  <span>Send</span>
+                </button>
+              </form>
+            </div>
+          </div>
         </section>
 
         <!-- Right Pane: Live Document Preview -->
@@ -631,6 +697,44 @@
           <button type="submit" class="btn btn-primary">Save Settings</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal: Create New Resume Mode Choice -->
+  <div id="modalCreateMode" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalCreateModeTitle">
+    <div class="modal-dialog modal-md">
+      <div class="modal-header">
+        <h3 id="modalCreateModeTitle">Create New Resume</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalCreateMode" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">Choose how you would like to start. You can switch between Manual Wizard and AI Builder at any time while editing.</p>
+        <div class="create-mode-grid">
+          <button type="button" id="btnChooseManualCreate" class="create-mode-card">
+            <div class="create-mode-icon">
+              <i data-lucide="list-checks"></i>
+            </div>
+            <div class="create-mode-text">
+              <strong>Guided Manual Wizard</strong>
+              <span>Walk step-by-step through contact details, sections, and bullet entries with full direct control.</span>
+            </div>
+            <span class="create-mode-cta">Start Manually <i data-lucide="arrow-right"></i></span>
+          </button>
+
+          <button type="button" id="btnChooseAiCreate" class="create-mode-card">
+            <div class="create-mode-icon">
+              <i data-lucide="bot"></i>
+            </div>
+            <div class="create-mode-text">
+              <strong>Build with AI Assistant</strong>
+              <span>Describe your experience in plain language while the AI asks clarifying questions and fills the live template.</span>
+            </div>
+            <span class="create-mode-cta">Start with AI <i data-lucide="arrow-right"></i></span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 

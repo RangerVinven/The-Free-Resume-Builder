@@ -1828,6 +1828,212 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+/* Editor Mode Switcher Bar & Full-Resume AI Builder */
+.editor-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  background-color: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.editor-mode-group {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.editor-mode-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-mode-tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+.editor-mode-tab:hover {
+  color: var(--text-primary);
+}
+
+.editor-mode-tab.active {
+  background-color: var(--blue-primary);
+  color: #ffffff;
+}
+
+.editor-mode-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-mode-view[hidden] {
+  display: none !important;
+}
+
+.ai-builder-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.ai-builder-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-builder-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-builder-thread {
+  background-color: var(--bg-app);
+}
+
+.ai-changes-banner {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background-color: var(--blue-tint);
+  border: 1px solid var(--blue-tint-border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.ai-changes-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--blue-primary);
+  margin-bottom: 4px;
+}
+
+.ai-changes-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary);
+}
+
+/* Create New Resume Choice Modal */
+.modal-md {
+  max-width: 640px;
+}
+
+.create-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.create-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 12px;
+  padding: 18px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.create-mode-card:hover {
+  border-color: var(--blue-primary);
+  background-color: var(--blue-tint);
+  box-shadow: var(--shadow-sm);
+}
+
+.create-mode-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background-color: var(--blue-tint);
+  border: 1px solid var(--blue-tint-border);
+  color: var(--blue-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.create-mode-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.create-mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.create-mode-text strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.create-mode-text span {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.create-mode-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--blue-primary);
+}
+
+.create-mode-cta svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* Toasts */
 .toast-container {
   position: fixed;
@@ -1907,8 +2113,13 @@ textarea:focus-visible {
 
 @media (max-width: 640px) {
   .form-grid-2,
-  .export-action-grid {
+  .export-action-grid,
+  .create-mode-grid {
     grid-template-columns: 1fr;
+  }
+
+  .editor-mode-bar {
+    padding: 8px 12px;
   }
 
   .wizard-stage-scroll {
