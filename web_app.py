@@ -13,16 +13,21 @@ from docxtpl import DocxTemplate
 
 from db import (
     _clean_str,
+    create_ai_chat_db,
     create_resume_db,
+    delete_ai_chat_db,
     delete_resume_db,
     duplicate_resume_db,
+    get_ai_chat_db,
     get_resume_db,
     get_version_db,
     init_db,
+    list_ai_chats_db,
     list_resumes_db,
     make_slug,
     normalize_resume_schema,
     revert_version_db,
+    save_ai_chat_db,
     update_resume_db,
 )
 from resume_builder import (
@@ -299,6 +304,64 @@ def preview_pdf_api(resume_id):
     if buf is None:
         return jsonify({"error": "PDF conversion failed."}), 500
     return send_file(buf, mimetype="application/pdf", as_attachment=False)
+
+
+@app.route("/api/resumes/<int:resume_id>/chats", methods=["GET"])
+def list_resume_chats_api(resume_id):
+    ensure_db()
+    if not get_resume_db(resume_id):
+        return jsonify({"error": "Resume not found."}), 404
+    return jsonify({"chats": list_ai_chats_db(resume_id)})
+
+
+@app.route("/api/chats", methods=["POST"])
+def create_chat_api():
+    ensure_db()
+    payload = request.get_json(silent=True) or {}
+    resume_id = payload.get("resume_id")
+    if resume_id is not None and not get_resume_db(int(resume_id)):
+        return jsonify({"error": "Resume not found."}), 404
+    chat = create_ai_chat_db(
+        resume_id=int(resume_id) if resume_id is not None else None,
+        title=_clean_str(payload.get("title")),
+        messages=payload.get("messages") or [],
+    )
+    return jsonify(chat), 201
+
+
+@app.route("/api/chats/<int:chat_id>", methods=["GET"])
+def get_chat_api(chat_id):
+    ensure_db()
+    chat = get_ai_chat_db(chat_id)
+    if not chat:
+        return jsonify({"error": "Chat not found."}), 404
+    return jsonify(chat)
+
+
+@app.route("/api/chats/<int:chat_id>", methods=["PUT"])
+def update_chat_api(chat_id):
+    ensure_db()
+    payload = request.get_json(silent=True) or {}
+    resume_id = payload.get("resume_id")
+    if resume_id is not None and not get_resume_db(int(resume_id)):
+        return jsonify({"error": "Resume not found."}), 404
+    updated = save_ai_chat_db(
+        chat_id,
+        messages=payload.get("messages"),
+        title=payload.get("title"),
+        resume_id=int(resume_id) if resume_id is not None else None,
+    )
+    if not updated:
+        return jsonify({"error": "Chat not found."}), 404
+    return jsonify(updated)
+
+
+@app.route("/api/chats/<int:chat_id>", methods=["DELETE"])
+def delete_chat_api(chat_id):
+    ensure_db()
+    if not delete_ai_chat_db(chat_id):
+        return jsonify({"error": "Chat not found."}), 404
+    return jsonify({"status": "deleted"})
 
 
 @app.route("/api/settings", methods=["GET"])

@@ -435,48 +435,71 @@
 
           <!-- Full-Resume Conversational AI Builder View -->
           <div id="aiBuilderView" class="editor-mode-view ai-builder-view" hidden>
-            <div class="ai-builder-subbar">
-              <div class="ai-builder-title-wrap">
-                <span class="ai-builder-heading">Conversational Resume Builder</span>
-                <span id="fullAiModelBadge" class="mono-code">OpenAI</span>
-              </div>
-              <div class="ai-builder-actions">
-                <button type="button" id="btnFullAiUndo" class="btn btn-ghost btn-xs" title="Undo last AI edit" hidden>
-                  <i data-lucide="undo-2"></i>
-                  <span>Undo Last Edit</span>
-                </button>
-                <button type="button" id="btnFullAiReset" class="btn btn-ghost btn-xs" title="Start a fresh conversation">
-                  <i data-lucide="rotate-ccw"></i>
-                  <span>New Chat</span>
+            <aside id="aiChatsSidebar" class="ai-chats-sidebar" hidden aria-label="Saved AI Conversations">
+              <div class="ai-chats-sidebar-head">
+                <span class="ai-chats-sidebar-title">Saved Chats</span>
+                <button type="button" id="btnSidebarNewChat" class="btn btn-secondary btn-xs" title="Start a new saved chat">
+                  <i data-lucide="plus"></i>
+                  <span>New</span>
                 </button>
               </div>
-            </div>
+              <div id="aiChatsList" class="ai-chats-list" role="list"></div>
+            </aside>
 
-            <div id="fullAiNoKeyBanner" class="ai-key-banner" hidden>
-              <div class="ai-key-banner-text">
-                <i data-lucide="alert-circle" class="ai-banner-icon"></i>
-                <span id="fullAiNoKeyText">No OpenAI API key is configured. Add your key in Settings to use the AI Builder.</span>
+            <div class="ai-builder-main">
+              <div class="ai-builder-subbar">
+                <div class="ai-builder-title-wrap">
+                  <button
+                    type="button"
+                    id="btnToggleAiSidebar"
+                    class="btn btn-ghost btn-xs ai-sidebar-toggle"
+                    title="Toggle saved chats sidebar"
+                    aria-expanded="false"
+                  >
+                    <i data-lucide="panel-left"></i>
+                    <span id="aiChatsCountBadge" class="badge-count" hidden>0</span>
+                  </button>
+                  <span class="ai-builder-heading">Conversational Resume Builder</span>
+                  <span id="fullAiModelBadge" class="mono-code">OpenAI</span>
+                </div>
+                <div class="ai-builder-actions">
+                  <button type="button" id="btnFullAiUndo" class="btn btn-ghost btn-xs" title="Undo last AI edit" hidden>
+                    <i data-lucide="undo-2"></i>
+                    <span>Undo Last Edit</span>
+                  </button>
+                  <button type="button" id="btnFullAiReset" class="btn btn-ghost btn-xs" title="Start a fresh conversation">
+                    <i data-lucide="rotate-ccw"></i>
+                    <span>New Chat</span>
+                  </button>
+                </div>
               </div>
-              <button type="button" id="btnFullAiOpenSettings" class="btn btn-secondary btn-xs">Open Settings</button>
-            </div>
 
-            <div id="fullAiMessages" class="ai-chat-thread ai-builder-thread" aria-live="polite"></div>
+              <div id="fullAiNoKeyBanner" class="ai-key-banner" hidden>
+                <div class="ai-key-banner-text">
+                  <i data-lucide="alert-circle" class="ai-banner-icon"></i>
+                  <span id="fullAiNoKeyText">No OpenAI API key is configured. Add your key in Settings to use the AI Builder.</span>
+                </div>
+                <button type="button" id="btnFullAiOpenSettings" class="btn btn-secondary btn-xs">Open Settings</button>
+              </div>
 
-            <div class="ai-drawer-footer">
-              <div id="fullAiQuickChips" class="ai-quick-chips"></div>
-              <form id="fullAiComposerForm" class="ai-composer-form">
-                <label for="fullAiInput" class="sr-only">Describe your background or ask the AI to update your resume</label>
-                <textarea
-                  id="fullAiInput"
-                  class="textarea-control ai-input"
-                  rows="1"
-                  placeholder="Tell the AI your background, target role, experience, or ask to edit a section..."
-                ></textarea>
-                <button type="submit" id="btnFullAiSend" class="btn btn-primary btn-sm ai-send-btn">
-                  <i data-lucide="send"></i>
-                  <span>Send</span>
-                </button>
-              </form>
+              <div id="fullAiMessages" class="ai-chat-thread ai-builder-thread" aria-live="polite"></div>
+
+              <div class="ai-drawer-footer">
+                <div id="fullAiQuickChips" class="ai-quick-chips"></div>
+                <form id="fullAiComposerForm" class="ai-composer-form">
+                  <label for="fullAiInput" class="sr-only">Describe your background or ask the AI to update your resume</label>
+                  <textarea
+                    id="fullAiInput"
+                    class="textarea-control ai-input"
+                    rows="1"
+                    placeholder="Tell the AI your background, target role, experience, or ask to edit a section..."
+                  ></textarea>
+                  <button type="submit" id="btnFullAiSend" class="btn btn-primary btn-sm ai-send-btn">
+                    <i data-lucide="send"></i>
+                    <span>Send</span>
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
         </section>

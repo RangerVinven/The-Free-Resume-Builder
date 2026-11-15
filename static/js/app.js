@@ -31,6 +31,9 @@
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
     editorMode: 'manual', // 'manual' | 'ai'
+    fullAiChats: [], // [{ id, title, message_count, updated_at }]
+    activeFullAiChatId: null,
+    aiSidebarOpen: null, // null = auto (open if chats exist on wide viewport)
     fullAiMessages: [], // { role: 'user'|'assistant', content: string, changes?: string[] }
     fullAiLoading: false,
     lastAiUndoState: null, // deep copy of resume data prior to latest AI edit
@@ -170,6 +173,11 @@
     btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
 
     // Full-Resume AI Builder View
+    aiChatsSidebar: document.getElementById('aiChatsSidebar'),
+    btnToggleAiSidebar: document.getElementById('btnToggleAiSidebar'),
+    aiChatsCountBadge: document.getElementById('aiChatsCountBadge'),
+    btnSidebarNewChat: document.getElementById('btnSidebarNewChat'),
+    aiChatsList: document.getElementById('aiChatsList'),
     fullAiModelBadge: document.getElementById('fullAiModelBadge'),
     btnFullAiUndo: document.getElementById('btnFullAiUndo'),
     btnFullAiReset: document.getElementById('btnFullAiReset'),
@@ -574,6 +582,9 @@
     state.aiOpen = false;
     state.aiTarget = null;
     state.editorMode = 'manual';
+    state.fullAiChats = [];
+    state.activeFullAiChatId = null;
+    state.aiSidebarOpen = null;
     state.fullAiMessages = [];
     state.fullAiLoading = false;
     state.lastAiUndoState = null;
@@ -819,6 +830,9 @@
     state.activeResumeSlug = 'resume';
     state.wizardStep = 1;
     state.activeSectionIdx = 0;
+    state.fullAiChats = [];
+    state.activeFullAiChatId = null;
+    state.aiSidebarOpen = null;
     state.fullAiMessages = [];
     state.lastAiUndoState = null;
     state.data = {
@@ -847,6 +861,11 @@
     }
     state.wizardStep = startStep;
     state.activeSectionIdx = 0;
+    state.fullAiChats = [];
+    state.activeFullAiChatId = null;
+    state.aiSidebarOpen = null;
+    state.fullAiMessages = [];
+    state.lastAiUndoState = null;
     setDirty(false, true);
     enterWizardView();
   }
@@ -931,6 +950,13 @@
       state.activeResumeSlug = res.slug || 'resume';
       // Preserve live in-memory object references in case user kept typing during request
       state.data._history = res.data._history || [];
+      if (state.activeFullAiChatId !== null) {
+        await fetchJson(`/api/chats/${encodeURIComponent(state.activeFullAiChatId)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ resume_id: res.id, messages: state.fullAiMessages }),
+        }).catch(() => {});
+        loadFullAiChats().catch(() => {});
+      }
       if (state.localEditSeq === sentSeq) {
         setDirty(false, true);
       } else {
@@ -2364,8 +2390,10 @@
     if (isAi) {
       if (state.aiOpen) closeAiDrawer();
       await refreshAiSettingsStatus();
+      await loadFullAiChats({ loadLatestIfEmpty: true });
       renderFullAiThread();
       renderFullAiQuickChips();
+      renderFullAiSidebar();
       el.btnFullAiUndo.hidden = !state.lastAiUndoState;
       if (window.lucide) lucide.createIcons();
       el.fullAiInput.focus();
@@ -2464,6 +2492,171 @@
     el.fullAiMessages.scrollTop = el.fullAiMessages.scrollHeight;
   }
 
+  function renderFullAiSidebar() {
+    if (!el.aiChatsSidebar || !el.aiChatsList) return;
+    const chats = Array.isArray(state.fullAiChats) ? state.fullAiChats : [];
+    const count = chats.length;
+    if (el.aiChatsCountBadge) {
+      el.aiChatsCountBadge.textContent = String(count);
+      el.aiChatsCountBadge.hidden = count === 0;
+    }
+
+    const isOpen = state.aiSidebarOpen === null
+      ? (count > 0 && window.innerWidth >= 1024)
+      : Boolean(state.aiSidebarOpen);
+
+    el.aiChatsSidebar.hidden = !isOpen;
+    if (el.btnToggleAiSidebar) {
+      el.btnToggleAiSidebar.classList.toggle('is-open', isOpen);
+      el.btnToggleAiSidebar.setAttribute('aria-expanded', String(isOpen));
+    }
+
+    el.aiChatsList.innerHTML = '';
+    if (chats.length === 0) {
+      el.aiChatsList.innerHTML = '<div class="ai-chats-empty">No saved chats yet. Start typing below to save this conversation.</div>';
+      return;
+    }
+
+    chats.forEach((chat) => {
+      const row = document.createElement('div');
+      row.className = 'ai-chat-item';
+      row.setAttribute('role', 'listitem');
+      if (chat.id === state.activeFullAiChatId) {
+        row.classList.add('active');
+      }
+
+      const body = document.createElement('div');
+      body.className = 'ai-chat-item-body';
+      body.innerHTML = `
+        <div class="ai-chat-item-title">${escapeHtml(chat.title || 'New Chat')}</div>
+        <div class="ai-chat-item-meta">${escapeHtml(`${chat.message_count || 0} msgs`)} &bull; ${escapeHtml(chat.updated_at || '')}</div>
+      `;
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'ai-chat-item-delete';
+      delBtn.title = 'Delete saved chat';
+      delBtn.setAttribute('aria-label', `Delete ${chat.title || 'chat'}`);
+      delBtn.innerHTML = '<i data-lucide="trash-2"></i>';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteFullAiChat(chat.id);
+      });
+
+      row.append(body, delBtn);
+      row.addEventListener('click', () => selectFullAiChat(chat.id));
+      el.aiChatsList.appendChild(row);
+    });
+
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function toggleAiSidebar() {
+    const currentlyOpen = !el.aiChatsSidebar.hidden;
+    state.aiSidebarOpen = !currentlyOpen;
+    renderFullAiSidebar();
+  }
+
+  async function loadFullAiChats({ loadLatestIfEmpty = false } = {}) {
+    if (!state.activeResumeId || state.isNewResume) {
+      renderFullAiSidebar();
+      return;
+    }
+    try {
+      const { chats } = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/chats`);
+      state.fullAiChats = Array.isArray(chats) ? chats : [];
+      if (loadLatestIfEmpty && state.activeFullAiChatId === null && state.fullAiMessages.length === 0 && state.fullAiChats.length > 0) {
+        await selectFullAiChat(state.fullAiChats[0].id, { skipFocus: true });
+      } else {
+        renderFullAiSidebar();
+      }
+    } catch {
+      renderFullAiSidebar();
+    }
+  }
+
+  async function selectFullAiChat(chatId, { skipFocus = false } = {}) {
+    if (state.fullAiLoading) return;
+    try {
+      const chat = await fetchJson(`/api/chats/${encodeURIComponent(chatId)}`);
+      state.activeFullAiChatId = chat.id;
+      state.fullAiMessages = Array.isArray(chat.messages) ? chat.messages : [];
+      renderFullAiThread();
+      renderFullAiQuickChips();
+      renderFullAiSidebar();
+      if (!skipFocus) {
+        el.fullAiInput.focus();
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to load chat.', 'error');
+    }
+  }
+
+  async function persistFullAiChat() {
+    const messagesPayload = state.fullAiMessages.map((m) => ({
+      role: m.role,
+      content: m.content || '',
+      ...(Array.isArray(m.changes) ? { changes: m.changes } : {}),
+    }));
+
+    let saved;
+    if (state.activeFullAiChatId === null) {
+      saved = await fetchJson('/api/chats', {
+        method: 'POST',
+        body: JSON.stringify({
+          resume_id: state.activeResumeId || null,
+          messages: messagesPayload,
+        }),
+      });
+      state.activeFullAiChatId = saved.id;
+    } else {
+      saved = await fetchJson(`/api/chats/${encodeURIComponent(state.activeFullAiChatId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          resume_id: state.activeResumeId || null,
+          messages: messagesPayload,
+        }),
+      });
+    }
+
+    if (state.activeResumeId && !state.isNewResume) {
+      const { chats } = await fetchJson(`/api/resumes/${encodeURIComponent(state.activeResumeId)}/chats`);
+      state.fullAiChats = Array.isArray(chats) ? chats : [];
+    } else if (saved) {
+      const summary = {
+        id: saved.id,
+        resume_id: saved.resume_id,
+        title: saved.title,
+        message_count: (saved.messages || []).length,
+        updated_at: (saved.updated_at || '').slice(0, 16),
+      };
+      const existingIdx = state.fullAiChats.findIndex((c) => c.id === saved.id);
+      if (existingIdx >= 0) {
+        state.fullAiChats.splice(existingIdx, 1);
+      }
+      state.fullAiChats.unshift(summary);
+    }
+
+    renderFullAiSidebar();
+  }
+
+  async function deleteFullAiChat(chatId) {
+    try {
+      await fetchJson(`/api/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+      state.fullAiChats = state.fullAiChats.filter((c) => c.id !== chatId);
+      if (state.activeFullAiChatId === chatId) {
+        state.activeFullAiChatId = null;
+        state.fullAiMessages = [];
+        renderFullAiThread();
+        renderFullAiQuickChips();
+      }
+      renderFullAiSidebar();
+      showToast('Deleted saved chat.', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to delete chat.', 'error');
+    }
+  }
+
   async function sendFullAiMessage(rawText) {
     if (state.fullAiLoading || !state.data) return;
     const text = (rawText || '').trim();
@@ -2476,6 +2669,7 @@
     el.btnFullAiSend.disabled = true;
     renderFullAiThread();
     renderFullAiQuickChips();
+    await persistFullAiChat().catch(() => {});
 
     const apiMessages = state.fullAiMessages.map((m) => ({
       role: m.role,
@@ -2526,6 +2720,7 @@
     } finally {
       state.fullAiLoading = false;
       el.btnFullAiSend.disabled = false;
+      await persistFullAiChat().catch(() => {});
       renderFullAiThread();
       renderFullAiQuickChips();
       el.fullAiInput.focus();
@@ -2545,9 +2740,12 @@
   }
 
   function resetFullAiConversation() {
+    if (state.fullAiLoading) return;
+    state.activeFullAiChatId = null;
     state.fullAiMessages = [];
     renderFullAiThread();
     renderFullAiQuickChips();
+    renderFullAiSidebar();
     el.fullAiInput.focus();
   }
 
@@ -2801,7 +2999,9 @@
       }
     });
 
-    // Full-Resume AI Builder Composer
+    // Full-Resume AI Builder Composer & Sidebar
+    el.btnToggleAiSidebar.addEventListener('click', toggleAiSidebar);
+    el.btnSidebarNewChat.addEventListener('click', resetFullAiConversation);
     el.btnFullAiUndo.addEventListener('click', undoLastFullAiChange);
     el.btnFullAiReset.addEventListener('click', resetFullAiConversation);
     el.btnFullAiOpenSettings.addEventListener('click', openSettingsModal);

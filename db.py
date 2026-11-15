@@ -162,6 +162,18 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 filename TEXT PRIMARY KEY,
                 imported_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ai_chats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                resume_id INTEGER REFERENCES resumes(id) ON DELETE CASCADE,
+                title TEXT NOT NULL DEFAULT 'New Chat',
+                messages_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_chats_resume_id
+                ON ai_chats(resume_id, updated_at);
             """
         )
 
@@ -375,7 +387,7 @@ def create_resume_db(
             (resume_id, initial_label or "Initial Draft", snapshot_str, now),
         )
 
-    return get_resume_db(resume_id, db_path=db_path)  # type: ignore[return-value]
+    return get_resume_db(resume_id, db_path=db_path)
 
 
 def duplicate_resume_db(resume_id: int, db_path: Path | None = None) -> dict | None:
@@ -607,3 +619,160 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
         )
 
     return get_resume_db(resume_id, db_path=db_path)
+
+
+_CHIP_TITLE_MAP = {
+    "review my current resume and suggest concrete improvements or missing sections.": "Resume Review",
+    "ask me a few quick questions to add a new role or project to my resume.": "Add Role or Project",
+    "help organize or refine my technical skills section.": "Organize Technical Skills",
+    "start from the beginning and ask me a few clear questions (name, contact info, target role, education, experience) to build my resume.": "Step-by-Step Draft",
+    "i want to paste my rough background and work history so you can structure it into my resume.": "Draft from Notes",
+}
+
+
+def _clean_chat_messages(raw_messages: Any) -> list[dict]:
+    cleaned = []
+    if not isinstance(raw_messages, list):
+        return cleaned
+    for msg in raw_messages:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = msg.get("content") if isinstance(msg.get("content"), str) else ""
+        item: dict[str, Any] = {"role": role, "content": content}
+        if role == "assistant" and isinstance(msg.get("changes"), list):
+            item["changes"] = [str(c).strip() for c in msg["changes"] if str(c).strip()]
+        cleaned.append(item)
+    return cleaned
+
+
+def generate_chat_title(messages: list[dict]) -> str:
+    """Derive a concise readable title from the first user message."""
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        raw = (msg.get("content") or "").strip()
+        if not raw:
+            continue
+        lower = raw.lower()
+        if lower in _CHIP_TITLE_MAP:
+            return _CHIP_TITLE_MAP[lower]
+        first_line = next((line.strip() for line in raw.splitlines() if line.strip()), raw)
+        compact = re.sub(r"\s+", " ", first_line).strip()
+        if len(compact) <= 42:
+            return compact
+        clipped = compact[:42].rsplit(" ", 1)[0].strip()
+        return f"{clipped or compact[:39]}..."
+    return "New Chat"
+
+
+def list_ai_chats_db(resume_id: int, db_path: Path | None = None) -> list[dict]:
+    """List saved AI Builder conversations for a resume, newest first."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, resume_id, title, messages_json, created_at, updated_at
+            FROM ai_chats
+            WHERE resume_id = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (resume_id,),
+        ).fetchall()
+        chats = []
+        for r in rows:
+            msgs = json.loads(r["messages_json"] or "[]")
+            chats.append({
+                "id": r["id"],
+                "resume_id": r["resume_id"],
+                "title": r["title"] or "New Chat",
+                "message_count": len(msgs),
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"][:16],
+            })
+        return chats
+
+
+def get_ai_chat_db(chat_id: int, db_path: Path | None = None) -> dict | None:
+    """Fetch a full saved AI Builder conversation by ID."""
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM ai_chats WHERE id = ?", (chat_id,)).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "resume_id": row["resume_id"],
+            "title": row["title"] or "New Chat",
+            "messages": _clean_chat_messages(json.loads(row["messages_json"] or "[]")),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def create_ai_chat_db(
+    resume_id: int | None = None,
+    title: str = "",
+    messages: Any = None,
+    db_path: Path | None = None,
+) -> dict:
+    """Create and persist a new AI Builder conversation."""
+    clean_msgs = _clean_chat_messages(messages)
+    resolved_title = _clean_str(title) or generate_chat_title(clean_msgs)
+    now = _now_str()
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO ai_chats (resume_id, title, messages_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (resume_id, resolved_title, json.dumps(clean_msgs), now, now),
+        )
+        chat_id = cur.lastrowid
+    return get_ai_chat_db(chat_id, db_path=db_path)
+
+
+def save_ai_chat_db(
+    chat_id: int,
+    messages: Any = None,
+    title: str | None = None,
+    resume_id: int | None = None,
+    db_path: Path | None = None,
+) -> dict | None:
+    """Update messages, optional title, or resume attachment on a saved AI chat."""
+    now = _now_str()
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM ai_chats WHERE id = ?", (chat_id,)).fetchone()
+        if not row:
+            return None
+
+        clean_msgs = (
+            _clean_chat_messages(messages)
+            if messages is not None
+            else _clean_chat_messages(json.loads(row["messages_json"] or "[]"))
+        )
+        next_resume_id = resume_id if (resume_id is not None and row["resume_id"] is None) else row["resume_id"]
+        cur_title = (row["title"] or "").strip()
+        if title is not None and _clean_str(title):
+            next_title = _clean_str(title)
+        elif not cur_title or cur_title == "New Chat":
+            next_title = generate_chat_title(clean_msgs)
+        else:
+            next_title = cur_title
+
+        conn.execute(
+            """
+            UPDATE ai_chats
+            SET resume_id = ?, title = ?, messages_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (next_resume_id, next_title, json.dumps(clean_msgs), now, chat_id),
+        )
+    return get_ai_chat_db(chat_id, db_path=db_path)
+
+
+def delete_ai_chat_db(chat_id: int, db_path: Path | None = None) -> bool:
+    """Delete a saved AI Builder conversation by ID."""
+    with get_connection(db_path) as conn:
+        cur = conn.execute("DELETE FROM ai_chats WHERE id = ?", (chat_id,))
+        return cur.rowcount > 0
