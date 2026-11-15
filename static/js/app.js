@@ -585,6 +585,84 @@
     showToast(`Added section "${cleanTitle}"`, 'success');
   }
 
+  function convertKeyValueToStandardItems(items) {
+    const details = [];
+    (items || []).forEach((kv) => {
+      const cat = (kv.category || '').trim();
+      const val = (kv.text || '').trim();
+      const combined = (cat && val) ? `${cat}: ${val}` : (cat || val);
+      if (combined) {
+        details.push({ is_bullet: true, text: combined });
+      }
+    });
+    if (details.length === 0) return [];
+    return [{
+      role: '',
+      company: '',
+      location: '',
+      date: '',
+      subtitle: '',
+      subtitle_right: '',
+      details,
+    }];
+  }
+
+  function convertStandardToKeyValueItems(items) {
+    const kvItems = [];
+    let bulletCounter = 1;
+    (items || []).forEach((item) => {
+      const details = item.details || [];
+      if (details.length > 0) {
+        details.forEach((d) => {
+          kvItems.push({
+            category: `Bullet ${bulletCounter}`,
+            text: (d.text || '').trim(),
+          });
+          bulletCounter += 1;
+        });
+      } else {
+        const headerSummary = [item.role, item.company, item.location, item.subtitle, item.subtitle_right]
+          .filter((v) => v && String(v).trim().length > 0)
+          .join(', ');
+        if (headerSummary || item.date) {
+          kvItems.push({
+            category: `Bullet ${bulletCounter}`,
+            text: item.date ? `${headerSummary} (${item.date})` : headerSummary,
+          });
+          bulletCounter += 1;
+        }
+      }
+    });
+    return kvItems;
+  }
+
+  function toggleSectionFormat(sec) {
+    const currentlyKV = Boolean(sec.is_skills);
+    const hasItems = Array.isArray(sec.items) && sec.items.length > 0;
+    const targetFormat = currentlyKV ? 'Standard' : 'Key-Value';
+
+    if (hasItems) {
+      const msg = currentlyKV
+        ? `Convert "${sec.title}" from Key-Value to Standard format?\nEach key-value pair will become a bullet point (<category>: <value>).`
+        : `Convert "${sec.title}" from Standard to Key-Value format?\nEach detail will become a key-value row (Bullet x: <value>).`;
+      if (!confirm(msg)) return;
+    }
+
+    if (currentlyKV) {
+      sec.items = convertKeyValueToStandardItems(sec.items);
+      sec.is_skills = false;
+    } else {
+      sec.items = convertStandardToKeyValueItems(sec.items);
+      sec.is_skills = true;
+    }
+
+    setDirty(true);
+    if (state.wizardStep === 2) renderStage2Outline();
+    if (state.wizardStep === 3) renderStage3Content();
+    renderPreview();
+    showToast(`Converted "${sec.title}" to ${targetFormat} format.`, 'success');
+  }
+
   function renderStage2Outline() {
     const sections = state.data?.sections || [];
     el.outlineCountLabel.textContent = `${sections.length} section${sections.length === 1 ? '' : 's'}`;
@@ -612,7 +690,7 @@
 
       const typeTag = document.createElement('span');
       typeTag.className = `type-tag${sec.is_skills ? '' : ' tag-standard'}`;
-      typeTag.textContent = sec.is_skills ? 'Skills' : 'Standard';
+      typeTag.textContent = sec.is_skills ? 'Key-Value' : 'Standard';
 
       const count = document.createElement('span');
       count.className = 'outline-count';
@@ -624,7 +702,15 @@
       const actions = document.createElement('div');
       actions.className = 'card-actions';
 
+      const switchBtn = document.createElement('button');
+      switchBtn.type = 'button';
+      switchBtn.className = 'btn btn-secondary btn-xs';
+      switchBtn.title = sec.is_skills ? 'Convert to Standard format' : 'Convert to Key-Value format';
+      switchBtn.innerHTML = `<i data-lucide="arrow-left-right"></i><span>${sec.is_skills ? 'To Standard' : 'To Key-Value'}</span>`;
+      switchBtn.addEventListener('click', () => toggleSectionFormat(sec));
+
       actions.append(
+        switchBtn,
         makeIconButton('arrow-up', 'Move up', idx === 0, () => {
           swapItems(sections, idx, idx - 1);
           setDirty(true);
@@ -669,7 +755,7 @@
   function getGuidanceForSection(sec) {
     if (!sec) return '';
     if (sec.is_skills) {
-      return '<strong>Skills Formatting:</strong> Group related competencies into categories (e.g., <em>Languages</em>, <em>Frameworks &amp; Cloud</em>) with comma-separated values.';
+      return '<strong>Key-Value Formatting:</strong> Each row renders as a bold key followed by its value (e.g., <em>Languages: Python, Go, Docker</em> or <em>Certification: AWS Solutions Architect</em>).';
     }
     const title = (sec.title || '').toUpperCase();
     if (title.includes('SUMMARY') || title.includes('PROFILE')) {
@@ -740,12 +826,21 @@
     titleGroup.innerHTML = `
       <i data-lucide="${isSkills ? 'tags' : 'briefcase'}" class="card-icon"></i>
       <h3 class="card-title">${escapeHtml((sec.title || 'UNTITLED').toUpperCase())}</h3>
-      <span class="type-tag${isSkills ? '' : ' tag-standard'}">${isSkills ? 'Skills' : 'Standard'}</span>
+      <span class="type-tag${isSkills ? '' : ' tag-standard'}">${isSkills ? 'Key-Value' : 'Standard'}</span>
     `;
 
     const actions = document.createElement('div');
     actions.className = 'card-actions';
+
+    const switchBtn = document.createElement('button');
+    switchBtn.type = 'button';
+    switchBtn.className = 'btn btn-secondary btn-xs';
+    switchBtn.title = isSkills ? 'Convert to Standard format' : 'Convert to Key-Value format';
+    switchBtn.innerHTML = `<i data-lucide="arrow-left-right"></i><span>${isSkills ? 'Switch to Standard' : 'Switch to Key-Value'}</span>`;
+    switchBtn.addEventListener('click', () => toggleSectionFormat(sec));
+
     actions.append(
+      switchBtn,
       makeIconButton('pencil', 'Rename section', false, () => {
         state.renameSectionIdx = secIdx;
         el.inputSectionTitle.value = sec.title || '';
@@ -767,7 +862,7 @@
       const hint = document.createElement('p');
       hint.className = 'field-hint';
       hint.textContent = isSkills
-        ? 'No skill categories yet. Add one below.'
+        ? 'No key-value entries yet. Add one below.'
         : 'No entries in this section yet. Add your first entry below.';
       itemsList.appendChild(hint);
     } else {
@@ -779,7 +874,7 @@
     const addItemBtn = document.createElement('button');
     addItemBtn.type = 'button';
     addItemBtn.className = 'btn btn-secondary btn-sm';
-    addItemBtn.innerHTML = `<i data-lucide="plus"></i><span>${isSkills ? 'Add Skill Category' : 'Add Entry'}</span>`;
+    addItemBtn.innerHTML = `<i data-lucide="plus"></i><span>${isSkills ? 'Add Key-Value Row' : 'Add Entry'}</span>`;
     addItemBtn.addEventListener('click', () => {
       if (!Array.isArray(sec.items)) sec.items = [];
       if (isSkills) {
@@ -823,7 +918,7 @@
 
   function getItemSummaryLabel(item, isSkills, idx) {
     if (isSkills) {
-      return item.category ? item.category : `Skill Category #${idx + 1}`;
+      return item.category ? item.category : `Key-Value #${idx + 1}`;
     }
     const parts = [item.role, item.company].filter(Boolean);
     if (parts.length > 0) return parts.join(' — ');
@@ -879,13 +974,13 @@
       grid.className = 'form-grid-2';
 
       grid.append(
-        createInputField('Category', item.category || '', 'e.g. Languages', (val) => {
+        createInputField('Key / Category', item.category || '', 'e.g. Languages', (val) => {
           item.category = val;
           label.textContent = getItemSummaryLabel(item, true, itemIdx);
           setDirty(true);
           renderPreview();
         }),
-        createInputField('Skills (comma-separated)', item.text || '', 'e.g. Python, Go, Docker', (val) => {
+        createInputField('Value', item.text || '', 'e.g. Python, Go, Docker', (val) => {
           item.text = val;
           setDirty(true);
           renderPreview();
