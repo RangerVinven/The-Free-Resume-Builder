@@ -462,11 +462,6 @@
         colSecs.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">No sections</span>';
       }
 
-      // History count
-      const colHist = document.createElement('div');
-      colHist.className = 'dir-mono-cell';
-      colHist.textContent = `${r.history_count || 0} saved`;
-
       // Updated at
       const colTime = document.createElement('div');
       colTime.className = 'dir-mono-cell';
@@ -506,7 +501,7 @@
       const btnDel = makeIconButton('trash-2', 'Delete Resume', false, () => openDeleteModal(r.id, r.name), 'btn-danger-hover');
 
       colActions.append(btnEdit, btnJson, btnDocx, btnPdf, btnDel);
-      row.append(colCand, colSecs, colHist, colTime, colActions);
+      row.append(colCand, colSecs, colTime, colActions);
       el.directoryRows.appendChild(row);
     });
 
