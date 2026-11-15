@@ -448,26 +448,39 @@
     </div>
   </div>
 
-  <!-- Modal: Rename Section -->
+  <!-- Modal: Edit Section -->
   <div id="modalSectionTitle" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalSectionTitleHeading">
     <div class="modal-dialog modal-sm">
       <div class="modal-header">
-        <h3 id="modalSectionTitleHeading">Rename Section</h3>
+        <h3 id="modalSectionTitleHeading">Edit Section</h3>
         <button class="btn btn-ghost btn-xs modal-close" data-close="modalSectionTitle" aria-label="Close">
           <i data-lucide="x"></i>
         </button>
       </div>
       <form id="formSectionTitle">
         <div class="modal-body">
-          <div class="form-field">
-            <label for="inputSectionTitle">Section Title</label>
-            <input id="inputSectionTitle" type="text" class="input-control" required placeholder="e.g. EXPERIENCE, EDUCATION" />
-            <p class="field-hint">Titles are formatted in uppercase on the final document.</p>
+          <div class="form-stack">
+            <div class="form-field">
+              <label for="inputSectionTitle">Section Title</label>
+              <input id="inputSectionTitle" type="text" class="input-control" required placeholder="e.g. EXPERIENCE, EDUCATION" />
+              <p class="field-hint">Titles are formatted in uppercase on the final document.</p>
+            </div>
+            <div class="form-field">
+              <label for="selectSectionFormat">Format</label>
+              <select id="selectSectionFormat" class="select-control">
+                <option value="standard">Standard</option>
+                <option value="skills">Key-Value</option>
+              </select>
+            </div>
+            <div id="sectionFormatHint" class="guidance-box" hidden>
+              <i data-lucide="info" class="guidance-icon"></i>
+              <div id="sectionFormatHintText" class="guidance-text"></div>
+            </div>
           </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-close="modalSectionTitle">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Title</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
         </div>
       </form>
     </div>

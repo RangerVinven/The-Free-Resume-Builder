@@ -117,6 +117,9 @@
     modalSectionTitle: document.getElementById('modalSectionTitle'),
     formSectionTitle: document.getElementById('formSectionTitle'),
     inputSectionTitle: document.getElementById('inputSectionTitle'),
+    selectSectionFormat: document.getElementById('selectSectionFormat'),
+    sectionFormatHint: document.getElementById('sectionFormatHint'),
+    sectionFormatHintText: document.getElementById('sectionFormatHintText'),
 
     modalDeleteResume: document.getElementById('modalDeleteResume'),
     formDeleteResume: document.getElementById('formDeleteResume'),
@@ -636,17 +639,9 @@
     return kvItems;
   }
 
-  function toggleSectionFormat(sec) {
+  function convertSectionFormat(sec, targetIsSkills) {
     const currentlyKV = Boolean(sec.is_skills);
-    const hasItems = Array.isArray(sec.items) && sec.items.length > 0;
-    const targetFormat = currentlyKV ? 'Standard' : 'Key-Value';
-
-    if (hasItems) {
-      const msg = currentlyKV
-        ? `Convert "${sec.title}" from Key-Value to Standard format?\nEach key-value pair will become a bullet point (<category>: <value>).`
-        : `Convert "${sec.title}" from Standard to Key-Value format?\nEach detail will become a key-value row (Bullet x: <value>).`;
-      if (!confirm(msg)) return;
-    }
+    if (currentlyKV === Boolean(targetIsSkills)) return false;
 
     if (currentlyKV) {
       sec.items = convertKeyValueToStandardItems(sec.items);
@@ -655,12 +650,40 @@
       sec.items = convertStandardToKeyValueItems(sec.items);
       sec.is_skills = true;
     }
+    return true;
+  }
 
-    setDirty(true);
-    if (state.wizardStep === 2) renderStage2Outline();
-    if (state.wizardStep === 3) renderStage3Content();
-    renderPreview();
-    showToast(`Converted "${sec.title}" to ${targetFormat} format.`, 'success');
+  function updateSectionFormatHint() {
+    if (state.renameSectionIdx === null || !state.data) {
+      el.sectionFormatHint.hidden = true;
+      return;
+    }
+    const sec = state.data.sections[state.renameSectionIdx];
+    const currentKV = Boolean(sec.is_skills);
+    const selectedKV = el.selectSectionFormat.value === 'skills';
+    const hasItems = Array.isArray(sec.items) && sec.items.length > 0;
+
+    if (currentKV === selectedKV || !hasItems) {
+      el.sectionFormatHint.hidden = true;
+      return;
+    }
+
+    el.sectionFormatHint.hidden = false;
+    el.sectionFormatHintText.innerHTML = selectedKV
+      ? 'Converting to <strong>Key-Value</strong> will turn each detail into a row formatted as <code class="mono-code">Bullet x: &lt;value&gt;</code>.'
+      : 'Converting to <strong>Standard</strong> will turn each key-value pair into a bullet point (<code class="mono-code">&lt;category&gt;: &lt;value&gt;</code>).';
+  }
+
+  function openEditSectionModal(secIdx) {
+    const sec = state.data?.sections?.[secIdx];
+    if (!sec) return;
+    state.renameSectionIdx = secIdx;
+    el.inputSectionTitle.value = sec.title || '';
+    el.selectSectionFormat.value = sec.is_skills ? 'skills' : 'standard';
+    updateSectionFormatHint();
+    openModal(el.modalSectionTitle);
+    if (window.lucide) lucide.createIcons();
+    el.inputSectionTitle.focus();
   }
 
   function renderStage2Outline() {
@@ -702,15 +725,7 @@
       const actions = document.createElement('div');
       actions.className = 'card-actions';
 
-      const switchBtn = document.createElement('button');
-      switchBtn.type = 'button';
-      switchBtn.className = 'btn btn-secondary btn-xs';
-      switchBtn.title = sec.is_skills ? 'Convert to Standard format' : 'Convert to Key-Value format';
-      switchBtn.innerHTML = `<i data-lucide="arrow-left-right"></i><span>${sec.is_skills ? 'To Standard' : 'To Key-Value'}</span>`;
-      switchBtn.addEventListener('click', () => toggleSectionFormat(sec));
-
       actions.append(
-        switchBtn,
         makeIconButton('arrow-up', 'Move up', idx === 0, () => {
           swapItems(sections, idx, idx - 1);
           setDirty(true);
@@ -723,12 +738,7 @@
           renderStage2Outline();
           renderPreview();
         }),
-        makeIconButton('pencil', 'Rename section', false, () => {
-          state.renameSectionIdx = idx;
-          el.inputSectionTitle.value = sec.title || '';
-          openModal(el.modalSectionTitle);
-          el.inputSectionTitle.focus();
-        }),
+        makeIconButton('pencil', 'Edit section', false, () => openEditSectionModal(idx)),
         makeIconButton('trash-2', 'Delete section', false, () => {
           if (confirm(`Delete section "${sec.title}" and all of its entries?`)) {
             sections.splice(idx, 1);
@@ -832,21 +842,8 @@
     const actions = document.createElement('div');
     actions.className = 'card-actions';
 
-    const switchBtn = document.createElement('button');
-    switchBtn.type = 'button';
-    switchBtn.className = 'btn btn-secondary btn-xs';
-    switchBtn.title = isSkills ? 'Convert to Standard format' : 'Convert to Key-Value format';
-    switchBtn.innerHTML = `<i data-lucide="arrow-left-right"></i><span>${isSkills ? 'Switch to Standard' : 'Switch to Key-Value'}</span>`;
-    switchBtn.addEventListener('click', () => toggleSectionFormat(sec));
-
     actions.append(
-      switchBtn,
-      makeIconButton('pencil', 'Rename section', false, () => {
-        state.renameSectionIdx = secIdx;
-        el.inputSectionTitle.value = sec.title || '';
-        openModal(el.modalSectionTitle);
-        el.inputSectionTitle.focus();
-      })
+      makeIconButton('pencil', 'Edit section', false, () => openEditSectionModal(secIdx))
     );
 
     header.append(titleGroup, actions);
@@ -1615,17 +1612,29 @@
       });
     });
 
-    // Rename Section Modal
+    // Edit Section Modal
+    el.selectSectionFormat.addEventListener('change', updateSectionFormatHint);
+
     el.formSectionTitle.addEventListener('submit', (e) => {
       e.preventDefault();
       const title = el.inputSectionTitle.value.trim().toUpperCase();
       if (!title || !state.data || state.renameSectionIdx === null) return;
-      state.data.sections[state.renameSectionIdx].title = title;
+      const sec = state.data.sections[state.renameSectionIdx];
+      sec.title = title;
+
+      const targetIsSkills = el.selectSectionFormat.value === 'skills';
+      const converted = convertSectionFormat(sec, targetIsSkills);
+
       setDirty(true);
       closeModal(el.modalSectionTitle);
       if (state.wizardStep === 2) renderStage2Outline();
       if (state.wizardStep === 3) renderStage3Content();
       renderPreview();
+      if (converted) {
+        showToast(`Updated "${sec.title}" (${targetIsSkills ? 'Key-Value' : 'Standard'} format).`, 'success');
+      } else {
+        showToast(`Updated section "${sec.title}".`, 'success');
+      }
     });
 
     // Delete Resume Modal
