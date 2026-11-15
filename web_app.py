@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -13,6 +14,7 @@ from db import (
     _clean_str,
     create_resume_db,
     delete_resume_db,
+    duplicate_resume_db,
     get_resume_db,
     get_version_db,
     init_db,
@@ -46,14 +48,25 @@ def ensure_db():
                 _db_initialized = True
 
 
-def render_docx_file(data: dict, out_docx_path: Path) -> Path:
-    """Render resume data into a .docx file using Base_Template.docx."""
+def _render_resume_bytes(data: dict, stem: str, fmt: str) -> BytesIO | None:
+    """Render DOCX or PDF inside an ephemeral temporary directory and return file bytes."""
     if not TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Template not found: {TEMPLATE_PATH}")
-    doc = DocxTemplate(TEMPLATE_PATH)
-    doc.render(data)
-    doc.save(out_docx_path)
-    return out_docx_path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_docx = Path(tmpdir) / f"{stem}_generated.docx"
+        doc = DocxTemplate(TEMPLATE_PATH)
+        doc.render(data)
+        doc.save(tmp_docx)
+
+        if fmt == "docx":
+            return BytesIO(tmp_docx.read_bytes())
+
+        with pdf_lock:
+            out_pdf = convert_docx_to_pdf(tmp_docx)
+        if not out_pdf or not Path(out_pdf).exists():
+            return None
+        return BytesIO(Path(out_pdf).read_bytes())
 
 
 @app.route("/")
@@ -81,6 +94,38 @@ def create_resume_api():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify(created), 201
+
+
+@app.route("/api/resumes/import", methods=["POST"])
+def import_resume_api():
+    ensure_db()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid JSON resume file."}), 400
+
+    # Support either direct resume object or wrapped { data: {...} }
+    candidate = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    fallback_name = _clean_str(payload.get("fallback_name"))
+    normalized = normalize_resume_schema(candidate)
+    if not normalized["name"] and fallback_name:
+        normalized["name"] = fallback_name
+    if not normalized["name"]:
+        return jsonify({"error": "Imported JSON must include a candidate 'name'."}), 400
+
+    try:
+        created = create_resume_db(normalized, initial_label="Imported from JSON")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(created), 201
+
+
+@app.route("/api/resumes/<int:resume_id>/duplicate", methods=["POST"])
+def duplicate_resume_api(resume_id):
+    ensure_db()
+    duplicated = duplicate_resume_db(resume_id)
+    if not duplicated:
+        return jsonify({"error": "Resume not found."}), 404
+    return jsonify(duplicated), 201
 
 
 @app.route("/api/resumes/<int:resume_id>", methods=["GET"])
@@ -160,17 +205,16 @@ def export_history_api(resume_id, version_id, fmt):
             download_name=f"{slug}_v{ver_num}.json",
         )
 
-    out_docx = Path(f"{slug}_history_v{ver_num}_generated.docx").resolve()
-    render_docx_file(hist_state, out_docx)
-
-    if fmt == "docx":
-        return send_file(out_docx, as_attachment=True, download_name=out_docx.name)
-
-    with pdf_lock:
-        out_pdf = convert_docx_to_pdf(out_docx)
-    if not out_pdf or not Path(out_pdf).exists():
+    stem = f"{slug}_history_v{ver_num}"
+    buf = _render_resume_bytes(hist_state, stem, fmt)
+    if buf is None:
         return jsonify({"error": "PDF conversion failed. Ensure Microsoft Word is accessible."}), 500
-    return send_file(out_pdf, as_attachment=True, download_name=Path(out_pdf).name)
+    mime = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if fmt == "docx"
+        else "application/pdf"
+    )
+    return send_file(buf, mimetype=mime, as_attachment=True, download_name=f"{stem}_generated.{fmt}")
 
 
 def _extract_export_payload(resume_id: int) -> tuple[dict | None, str | None]:
@@ -208,9 +252,13 @@ def export_docx_api(resume_id):
     if data is None:
         return jsonify({"error": "Resume not found."}), 404
 
-    out_docx = Path(f"{slug}_generated.docx").resolve()
-    render_docx_file(data, out_docx)
-    return send_file(out_docx, as_attachment=True, download_name=out_docx.name)
+    buf = _render_resume_bytes(data, slug, "docx")
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        as_attachment=True,
+        download_name=f"{slug}_generated.docx",
+    )
 
 
 @app.route("/api/resumes/<int:resume_id>/export/pdf", methods=["POST"])
@@ -220,15 +268,15 @@ def export_pdf_api(resume_id):
     if data is None:
         return jsonify({"error": "Resume not found."}), 404
 
-    out_docx = Path(f"{slug}_generated.docx").resolve()
-    render_docx_file(data, out_docx)
-
-    with pdf_lock:
-        out_pdf = convert_docx_to_pdf(out_docx)
-
-    if not out_pdf or not Path(out_pdf).exists():
+    buf = _render_resume_bytes(data, slug, "pdf")
+    if buf is None:
         return jsonify({"error": "PDF conversion failed. Ensure Microsoft Word is accessible."}), 500
-    return send_file(out_pdf, as_attachment=True, download_name=Path(out_pdf).name)
+    return send_file(
+        buf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"{slug}_generated.pdf",
+    )
 
 
 @app.route("/api/resumes/<int:resume_id>/preview-pdf", methods=["GET"])
@@ -240,15 +288,10 @@ def preview_pdf_api(resume_id):
 
     data = normalize_resume_schema(record["data"])
     slug = make_slug(data.get("name") or record["slug"])
-    out_docx = Path(f"{slug}_generated.docx").resolve()
-    render_docx_file(data, out_docx)
-
-    with pdf_lock:
-        out_pdf = convert_docx_to_pdf(out_docx)
-
-    if not out_pdf or not Path(out_pdf).exists():
+    buf = _render_resume_bytes(data, slug, "pdf")
+    if buf is None:
         return jsonify({"error": "PDF conversion failed."}), 500
-    return send_file(out_pdf, mimetype="application/pdf", as_attachment=False)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False)
 
 
 @app.route("/api/settings", methods=["GET"])

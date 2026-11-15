@@ -329,7 +329,11 @@ def get_resume_db(resume_id: int, db_path: Path | None = None) -> dict | None:
         }
 
 
-def create_resume_db(payload: dict, db_path: Path | None = None) -> dict:
+def create_resume_db(
+    payload: dict,
+    initial_label: str = "Initial Draft",
+    db_path: Path | None = None,
+) -> dict:
     clean = _strip_history(payload)
     if not clean["name"]:
         raise ValueError("Full Name is required.")
@@ -363,10 +367,42 @@ def create_resume_db(payload: dict, db_path: Path | None = None) -> dict:
             INSERT INTO resume_versions (resume_id, version_num, label, snapshot_json, created_at)
             VALUES (?, 1, ?, ?, ?)
             """,
-            (resume_id, "Initial Draft", snapshot_str, now),
+            (resume_id, initial_label or "Initial Draft", snapshot_str, now),
         )
 
     return get_resume_db(resume_id, db_path=db_path)  # type: ignore[return-value]
+
+
+def duplicate_resume_db(resume_id: int, db_path: Path | None = None) -> dict | None:
+    """Create a deep copy of an existing resume with a unique '(Copy)' name."""
+    source = get_resume_db(resume_id, db_path=db_path)
+    if not source:
+        return None
+
+    src_data = _strip_history(source["data"])
+    base_name = re.sub(r"\s+\(Copy(?:\s+\d+)?\)$", "", src_data["name"]).strip() or src_data["name"]
+
+    with get_connection(db_path) as conn:
+        existing_names = {
+            row["name"].strip().lower()
+            for row in conn.execute("SELECT name FROM resumes").fetchall()
+        }
+
+    candidate_name = f"{base_name} (Copy)"
+    counter = 2
+    while candidate_name.lower() in existing_names:
+        candidate_name = f"{base_name} (Copy {counter})"
+        counter += 1
+
+    copy_payload = {
+        **src_data,
+        "name": candidate_name,
+    }
+    return create_resume_db(
+        copy_payload,
+        initial_label=f"Duplicated from {src_data['name']}",
+        db_path=db_path,
+    )
 
 
 def _should_record_version(

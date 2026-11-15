@@ -3,4 +3,6 @@ __pycache__/
 resumes/
 resumes.db*
 *_generated.docx
+*_generated.pdf
 settings.json
+.DS_Store

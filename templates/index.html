@@ -39,6 +39,11 @@
       <div class="topbar-right">
         <!-- Directory Mode Toolbar -->
         <div id="directoryTopActions" class="topbar-actions-group">
+          <input id="importJsonFileInput" type="file" accept=".json,application/json" hidden />
+          <button id="btnDirImportJson" class="btn btn-secondary btn-sm" title="Import a resume from an exported JSON file">
+            <i data-lucide="upload"></i>
+            <span>Import JSON</span>
+          </button>
           <button id="btnDirSettings" class="btn btn-secondary btn-sm" title="Application Settings">
             <i data-lucide="sliders-horizontal"></i>
             <span>Settings</span>

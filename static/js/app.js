@@ -44,6 +44,8 @@
     activeResumeLabel: document.getElementById('activeResumeLabel'),
     directoryTopActions: document.getElementById('directoryTopActions'),
     wizardTopActions: document.getElementById('wizardTopActions'),
+    importJsonFileInput: document.getElementById('importJsonFileInput'),
+    btnDirImportJson: document.getElementById('btnDirImportJson'),
     btnDirSettings: document.getElementById('btnDirSettings'),
     btnDirNewResume: document.getElementById('btnDirNewResume'),
     btnWizSettings: document.getElementById('btnWizSettings'),
@@ -498,14 +500,49 @@
       btnPdf.textContent = 'PDF';
       btnPdf.addEventListener('click', () => downloadDirectFile(r.id, r.slug || 'resume', 'pdf', btnPdf));
 
+      const btnDup = makeIconButton('copy', 'Duplicate Resume', false, () => duplicateResume(r.id));
       const btnDel = makeIconButton('trash-2', 'Delete Resume', false, () => openDeleteModal(r.id, r.name), 'btn-danger-hover');
 
-      colActions.append(btnEdit, btnJson, btnDocx, btnPdf, btnDel);
+      colActions.append(btnEdit, btnJson, btnDocx, btnPdf, btnDup, btnDel);
       row.append(colCand, colSecs, colTime, colActions);
       el.directoryRows.appendChild(row);
     });
 
     if (window.lucide) lucide.createIcons();
+  }
+
+  async function duplicateResume(resumeId) {
+    try {
+      const res = await fetchJson(`/api/resumes/${encodeURIComponent(resumeId)}/duplicate`, {
+        method: 'POST',
+      });
+      await loadResumeList();
+      showToast(`Duplicated as "${res.data?.name || 'Copy'}".`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function importResumeFromJsonFile(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('JSON file must contain a resume object.');
+      }
+      const fallbackName = file.name.replace(/\.json$/i, '').replace(/[_-]+/g, ' ').trim();
+      const res = await fetchJson('/api/resumes/import', {
+        method: 'POST',
+        body: JSON.stringify({ data: parsed, fallback_name: fallbackName }),
+      });
+      await loadResumeList();
+      showToast(`Imported "${res.data?.name || 'Resume'}".`, 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to import JSON file.', 'error');
+    } finally {
+      el.importJsonFileInput.value = '';
+    }
   }
 
   async function downloadDirectFile(resumeId, slug, format, btn) {
@@ -2285,6 +2322,11 @@
     el.modeAiBuilder.addEventListener('click', () => setEditorMode('ai'));
     el.btnToggleEditorMode.addEventListener('click', () => {
       setEditorMode(state.editorMode === 'ai' ? 'manual' : 'ai');
+    });
+    el.btnDirImportJson.addEventListener('click', () => el.importJsonFileInput.click());
+    el.importJsonFileInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (file) importResumeFromJsonFile(file);
     });
     el.btnDirSettings.addEventListener('click', openSettingsModal);
     el.btnWizSettings.addEventListener('click', openSettingsModal);
