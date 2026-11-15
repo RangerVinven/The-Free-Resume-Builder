@@ -524,13 +524,12 @@
   function renderWizardStep() {
     const step = state.wizardStep;
 
-    // Stepper Pills
+    // Stepper Pills (all 4 steps accessible even before first disk save)
     el.stepButtons.forEach((btn) => {
       const btnStep = Number(btn.dataset.step);
       btn.classList.toggle('active', btnStep === step);
-      btn.classList.toggle('completed', !state.isNewResume && btnStep < step);
-      // Lock steps 2-4 until new resume has been saved/created
-      btn.disabled = state.isNewResume && btnStep > 1;
+      btn.classList.toggle('completed', btnStep < step);
+      btn.disabled = false;
     });
 
     // Show/Hide Stage Containers
@@ -542,9 +541,7 @@
     el.wizardStepIndicator.textContent = `Step ${step} of 4`;
     el.btnWizardPrev.disabled = step === 1;
 
-    if (step === 1 && state.isNewResume) {
-      el.btnWizardNext.innerHTML = '<span>Create &amp; Continue</span><i data-lucide="arrow-right"></i>';
-    } else if (step < 4) {
+    if (step < 4) {
       el.btnWizardNext.innerHTML = '<span>Next Step</span><i data-lucide="arrow-right"></i>';
     } else {
       el.btnWizardNext.innerHTML = '<span>Done (Back to List)</span><i data-lucide="check"></i>';
@@ -564,10 +561,6 @@
 
   async function goToWizardStep(targetStep) {
     if (targetStep < 1 || targetStep > 4) return;
-    if (state.isNewResume && targetStep > 1) {
-      const created = await createDraftResumeOnServer();
-      if (!created) return;
-    }
     if (targetStep !== 3 && state.aiOpen) {
       closeAiDrawer();
     }

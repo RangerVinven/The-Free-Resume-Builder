@@ -293,6 +293,33 @@ def update_settings_api():
     return jsonify({"settings": settings})
 
 
+SHARED_BULLET_GUIDE = (
+    "Bullet Point Writing Standards (Modified Google XYZ + Action-Impact):\n"
+    "- Formula: Lead with a strong action verb, state the quantified result or concrete outcome (X/Y), "
+    "and specify the technical method, system, or scope (Z): '[Verb] + [Accomplished X / Metric Y] + [by doing Z]'.\n"
+    "- Length: Aim for 1 crisp line on US Letter (roughly 80-125 characters). Never exceed 2 lines "
+    "(~190 characters max). Cut filler such as 'Responsible for', 'Helped to', 'Assisted with', or 'Successfully'.\n"
+    "- Statistics & Numbers: Highlight concrete numbers (%, $, latency, throughput, hours saved, team size, users) "
+    "whenever the user supplies them. NEVER invent or guess numbers. If the user's description lacks metrics or scope, "
+    "ask 1-3 quick questions in 'reply' to uncover real numbers before locking in final bullets.\n"
+    "- Tense & Punctuation: Past tense for previous roles; present tense for ongoing/current roles. "
+    "Do NOT include leading bullet characters ('•', '-', '*').\n\n"
+    "Reference Examples (notice 1-line punchiness, XYZ ordering, and clear metrics):\n"
+    "1. Weak: 'Helped make our backend API faster using Redis and Postgres queries.'\n"
+    "   Strong: 'Reduced API p95 latency by 42% (310ms to 180ms) for 120K daily users by adding Redis caching and SQL indexing.'\n"
+    "2. Weak: 'Built automation scripts for the finance team spreadsheet work.'\n"
+    "   Strong: 'Automated nightly billing reconciliation in Python and PostgreSQL, saving 12 hours of manual audits weekly.'\n"
+    "3. Weak: 'Managed Kubernetes migration project with a group of developers.'\n"
+    "   Strong: 'Led 4 engineers to migrate 18 legacy microservices to Kubernetes ahead of schedule with zero downtime.'\n"
+    "4. Weak: 'Did customer support onboarding and improved satisfaction.'\n"
+    "   Strong: 'Cut enterprise onboarding time from 14 days to 5 days by redesigning kickoff playbooks across 60+ accounts.'\n"
+    "5. Weak: 'Created an ML model for detecting fraud in transactions.'\n"
+    "   Strong: 'Built an XGBoost fraud classifier on 2.4M transactions, raising recall by 19% while keeping false positives under 1%.'\n"
+    "6. When user confirms no numeric metric is available (focus on concrete scope & outcome):\n"
+    "   Strong: 'Designed a centralized React component library adopted across 5 internal product teams to unify UI accessibility.'"
+)
+
+
 def build_bullet_system_prompt(context: dict) -> str:
     """Build a focused, factual system prompt for drafting or refining resume details."""
     section = context.get("section_title") or "EXPERIENCE"
@@ -325,19 +352,28 @@ def build_bullet_system_prompt(context: dict) -> str:
 
     ctx_block = "\n".join(ctx_lines)
 
+    style_section = (
+        f"{SHARED_BULLET_GUIDE}\n\n"
+        if is_bullet
+        else (
+            "Prose Writing Standards:\n"
+            "- Write a tight 1-2 line prose statement grounded strictly in facts provided by the user.\n"
+            "- Prioritize measurable outcomes or concrete scope; do NOT include leading bullet symbols ('•', '-', '*').\n\n"
+        )
+    )
+
     return (
         "You are a precise, practical resume writing coach helping the user craft a single "
         f"{style_label} for their resume.\n\n"
         f"Resume Entry Context:\n{ctx_block}\n\n"
-        "Guidelines:\n"
+        f"{style_section}"
+        "Interaction Guidelines:\n"
         "1. Never invent metrics, technologies, responsibilities, or achievements the user has not stated.\n"
-        "2. If the user has not yet described what they did—or if adding concrete scope, tools, or outcomes "
-        "would make the phrasing much stronger—ask 1 to 3 concise, specific questions.\n"
+        "2. If the user has not yet described what they did—or if asking for numbers/scale (e.g., %, $, time saved, "
+        "user volume) would turn a generic line into an XYZ bullet—ask 1 to 3 concise, specific questions.\n"
         "3. When you have enough information (or when the user asks for examples or rewrites), provide 2 to 3 "
-        "distinct, crisp options (e.g., 'Impact-Focused', 'Technical', 'Concise').\n"
-        "4. Do NOT include leading bullet symbols ('•', '-', '*') in suggestion text. Keep each option clean, "
-        "direct, and ready to paste into a resume.\n"
-        "5. Avoid generic fluff and exaggerated buzzwords.\n\n"
+        "distinct, crisp options (e.g., 'Impact-Focused (1-line)', 'Technical', 'Concise').\n"
+        "4. Avoid generic fluff and exaggerated buzzwords.\n\n"
         "You MUST respond strictly with a JSON object matching this schema:\n"
         "{\n"
         '  "reply": "Short conversational message or 1-3 clear clarifying questions.",\n'
@@ -469,14 +505,16 @@ def build_full_resume_system_prompt(resume_data: dict) -> str:
         "    }\n"
         "  ]\n"
         "}\n\n"
+        f"{SHARED_BULLET_GUIDE}\n\n"
         "Guidelines:\n"
         "1. Never fabricate employers, degrees, dates, projects, technologies, or metrics the user has not provided.\n"
         "2. Whenever the user shares facts (name, contact info, education, roles, projects, bullet ideas, or skills), "
-        "incorporate them into `updated_resume` right away while preserving ALL existing resume data they did not ask to remove.\n"
+        "incorporate them into `updated_resume` right away—formatting bullet points to match the Bullet Point Writing Standards above—"
+        "while preserving ALL existing resume data they did not ask to remove.\n"
         "3. Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for standard entries.\n"
         "4. Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
-        "5. If more details are needed for a section (or if starting from scratch), ask 2 to 4 focused, helpful questions "
-        "in `reply` about what to add next (e.g. target role, work history, education, or skills).\n"
+        "5. If user descriptions lack numbers or measurable outcomes, still draft clean initial bullets from known facts AND "
+        "ask 2 to 4 focused questions in `reply` (asking for stats/metrics/scale or missing resume sections next).\n"
         "6. You MUST respond strictly with a JSON object matching:\n"
         "{\n"
         '  "reply": "Conversational response summarizing what you updated and/or asking clear next questions.",\n'
