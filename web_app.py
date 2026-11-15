@@ -17,6 +17,8 @@ from resume_builder import (
 from convert_to_pdf import convert_docx_to_pdf
 
 app = Flask(__name__)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 pdf_lock = threading.Lock()
 
 
