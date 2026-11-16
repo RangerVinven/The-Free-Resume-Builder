@@ -32,7 +32,6 @@ from db import (
 from resume_builder import (
     TEMPLATE_PATH,
     load_settings,
-    normalize_formatting_settings,
     render_resume_docx,
     save_settings,
 )
@@ -371,7 +370,7 @@ def get_settings_api():
         "provider": ai_cfg.get("provider", "OpenAI"),
         "model": ai_cfg.get("model", "gpt-4o-mini"),
     })
-    settings["formatting"] = normalize_formatting_settings(settings.get("formatting"))
+    settings.pop("formatting", None)
     return jsonify({"settings": settings})
 
 
@@ -389,11 +388,7 @@ def update_settings_api():
             "provider": (ai_cfg.get("provider") or "OpenAI").strip(),
             "model": (ai_cfg.get("model") or "gpt-4o-mini").strip(),
         }
-    fmt_cfg = payload.get("formatting")
-    if isinstance(fmt_cfg, dict):
-        settings["formatting"] = normalize_formatting_settings(fmt_cfg)
-    else:
-        settings["formatting"] = normalize_formatting_settings(settings.get("formatting"))
+    settings.pop("formatting", None)
     save_settings(settings)
     return jsonify({"settings": settings})
 
@@ -503,6 +498,7 @@ def build_full_resume_system_prompt(resume_data: dict) -> str:
     """Build the system prompt for conversational full-resume construction."""
     snapshot = normalize_resume_schema(resume_data or {})
     snapshot.pop("_history", None)
+    snapshot.pop("formatting", None)
     snapshot_json = json.dumps(snapshot, indent=2)
 
     return (

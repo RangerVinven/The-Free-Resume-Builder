@@ -782,51 +782,58 @@
             </div>
 
             <div class="settings-divider"></div>
-            <div class="settings-section-heading">Resume Spacing &amp; Gaps (pt)</div>
-            <div class="form-grid-3">
-              <div class="form-field">
-                <label for="settingHeaderContentGap">Under Headers (pt)</label>
-                <input id="settingHeaderContentGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
-              </div>
-              <div class="form-field">
-                <label for="settingSectionGap">Between Sections (pt)</label>
-                <input id="settingSectionGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
-              </div>
-              <div class="form-field">
-                <label for="settingEntryGap">Between Entries (pt)</label>
-                <input id="settingEntryGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
-              </div>
-            </div>
-            <p class="field-hint">All section headers (including Professional Summary, Experience, and Skills) share the Under Headers gap by default.</p>
-
-            <div class="form-field">
-              <div class="override-header-row">
-                <label>Per-Header Gap Overrides <span class="label-optional">(optional)</span></label>
-                <button type="button" id="btnAddHeaderOverride" class="btn btn-secondary btn-xs">
-                  <i data-lucide="plus"></i><span>Add Override</span>
-                </button>
-              </div>
-              <datalist id="headerOverrideSuggestions">
-                <option value="PROFESSIONAL SUMMARY"></option>
-                <option value="EXPERIENCE"></option>
-                <option value="EDUCATION"></option>
-                <option value="PROJECTS"></option>
-                <option value="SKILLS"></option>
-                <option value="TECHNICAL SKILLS"></option>
-              </datalist>
-              <div id="headerGapOverridesList" class="override-list"></div>
+            <div id="resumeFormattingSettingsLockedNote" class="guidance-box" hidden>
+              <i data-lucide="info" class="guidance-icon"></i>
+              <div class="guidance-text"><strong>Per-Resume Formatting:</strong> Spacing gaps, per-header overrides, and auto-bold statistics are stored per resume. Open any resume and click <strong>Settings</strong> in the editor toolbar to customize them for that resume.</div>
             </div>
 
-            <div class="settings-divider"></div>
-            <div class="settings-section-heading">Typography &amp; Statistics</div>
-            <div class="form-field">
-              <label class="form-toggle-row" for="settingAutoBoldStats">
-                <input id="settingAutoBoldStats" type="checkbox" />
-                <span>
-                  <span class="form-toggle-title">Auto-bold statistics &amp; metrics</span>
-                  <span class="form-toggle-hint">Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; versions). Wrap any phrase in <code>**bold**</code> to take manual bolding control on that bullet, or prefix a number with <code>\</code> (e.g. <code>\24-bed</code>) to ignore it.</span>
-                </span>
-              </label>
+            <div id="resumeFormattingSettingsGroup" class="form-stack">
+              <div class="settings-section-heading">Resume Spacing &amp; Gaps (pt) <span id="resumeFormattingTargetLabel" class="label-optional"></span></div>
+              <div class="form-grid-3">
+                <div class="form-field">
+                  <label for="settingHeaderContentGap">Under Headers (pt)</label>
+                  <input id="settingHeaderContentGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+                </div>
+                <div class="form-field">
+                  <label for="settingSectionGap">Between Sections (pt)</label>
+                  <input id="settingSectionGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+                </div>
+                <div class="form-field">
+                  <label for="settingEntryGap">Between Entries (pt)</label>
+                  <input id="settingEntryGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+                </div>
+              </div>
+              <p class="field-hint">All section headers (including Professional Summary, Experience, and Skills) share the Under Headers gap by default.</p>
+
+              <div class="form-field">
+                <div class="override-header-row">
+                  <label>Per-Header Gap Overrides <span class="label-optional">(optional)</span></label>
+                  <button type="button" id="btnAddHeaderOverride" class="btn btn-secondary btn-xs">
+                    <i data-lucide="plus"></i><span>Add Override</span>
+                  </button>
+                </div>
+                <datalist id="headerOverrideSuggestions">
+                  <option value="PROFESSIONAL SUMMARY"></option>
+                  <option value="EXPERIENCE"></option>
+                  <option value="EDUCATION"></option>
+                  <option value="PROJECTS"></option>
+                  <option value="SKILLS"></option>
+                  <option value="TECHNICAL SKILLS"></option>
+                </datalist>
+                <div id="headerGapOverridesList" class="override-list"></div>
+              </div>
+
+              <div class="settings-divider"></div>
+              <div class="settings-section-heading">Typography &amp; Statistics (This Resume)</div>
+              <div class="form-field">
+                <label class="form-toggle-row" for="settingAutoBoldStats">
+                  <input id="settingAutoBoldStats" type="checkbox" />
+                  <span>
+                    <span class="form-toggle-title">Auto-bold statistics &amp; metrics</span>
+                    <span class="form-toggle-hint">Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; versions). Wrap any phrase in <code>**bold**</code> to take manual bolding control on that bullet, or prefix a number with <code>\</code> (e.g. <code>\24-bed</code>) to ignore it.</span>
+                  </span>
+                </label>
+              </div>
             </div>
           </div>
         </div>

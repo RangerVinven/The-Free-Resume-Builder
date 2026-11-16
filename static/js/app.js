@@ -183,6 +183,9 @@
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
+    resumeFormattingSettingsLockedNote: document.getElementById('resumeFormattingSettingsLockedNote'),
+    resumeFormattingSettingsGroup: document.getElementById('resumeFormattingSettingsGroup'),
+    resumeFormattingTargetLabel: document.getElementById('resumeFormattingTargetLabel'),
     settingHeaderContentGap: document.getElementById('settingHeaderContentGap'),
     settingSectionGap: document.getElementById('settingSectionGap'),
     settingEntryGap: document.getElementById('settingEntryGap'),
@@ -906,6 +909,7 @@
       portfolio: '',
       linkedin: '',
       sections: [],
+      formatting: normalizeFormattingConfig({}),
     };
     setDirty(false, true);
     enterWizardView(initialMode);
@@ -923,6 +927,7 @@
     if (!Array.isArray(state.data.sections)) {
       state.data.sections = [];
     }
+    state.data.formatting = normalizeFormattingConfig(state.data.formatting);
     state.wizardStep = startStep;
     state.activeSectionIdx = 0;
     state.fullAiChats = [];
@@ -2033,7 +2038,7 @@
       return;
     }
 
-    const fmt = normalizeFormattingConfig(state.formatting);
+    const fmt = normalizeFormattingConfig(state.data.formatting);
     el.resumePaper.style.setProperty('--paper-section-gap', `${fmt.section_gap_pt}pt`);
     el.resumePaper.style.setProperty('--paper-entry-gap', `${fmt.entry_gap_pt}pt`);
 
@@ -2305,7 +2310,6 @@
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
-      const fmt = settings.formatting || {};
       const provider = PROVIDER_DEFAULTS[ai.provider] ? ai.provider : 'OpenAI';
       const defaultModel = PROVIDER_DEFAULTS[provider].model;
       state.aiConfig = {
@@ -2313,10 +2317,6 @@
         model: (ai.model || '').trim() || defaultModel,
         hasActiveKey: Boolean((keys[provider] || '').trim()),
       };
-      state.formatting = normalizeFormattingConfig(fmt);
-      if (state.view === 'wizard' && state.data) {
-        renderPreview();
-      }
     } catch {
       // Leave existing config on transient failure
     }
@@ -3089,7 +3089,6 @@
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
-      const fmt = normalizeFormattingConfig(settings.formatting);
       el.aiProviderSelect.value = ai.provider || 'OpenAI';
       el.aiModelInput.value = ai.model || (PROVIDER_DEFAULTS[el.aiProviderSelect.value]?.model || 'gpt-4o-mini');
       syncSettingsProviderFields(false);
@@ -3097,13 +3096,25 @@
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
       el.keyOther.value = keys.Other || '';
-      el.settingHeaderContentGap.value = String(fmt.header_content_gap_pt);
-      el.settingSectionGap.value = String(fmt.section_gap_pt);
-      el.settingEntryGap.value = String(fmt.entry_gap_pt);
-      el.settingAutoBoldStats.checked = Boolean(fmt.auto_bold_stats);
-      refreshHeaderOverrideDatalist();
-      renderHeaderOverridesList(fmt.header_gap_overrides);
+
+      const hasOpenResume = state.view === 'wizard' && Boolean(state.data);
+      el.resumeFormattingSettingsGroup.hidden = !hasOpenResume;
+      el.resumeFormattingSettingsLockedNote.hidden = hasOpenResume;
+
+      if (hasOpenResume) {
+        const resumeTitle = (state.data.name || '').trim() || 'Current Resume';
+        el.resumeFormattingTargetLabel.textContent = `— ${resumeTitle}`;
+        const fmt = normalizeFormattingConfig(state.data.formatting);
+        el.settingHeaderContentGap.value = String(fmt.header_content_gap_pt);
+        el.settingSectionGap.value = String(fmt.section_gap_pt);
+        el.settingEntryGap.value = String(fmt.entry_gap_pt);
+        el.settingAutoBoldStats.checked = Boolean(fmt.auto_bold_stats);
+        refreshHeaderOverrideDatalist();
+        renderHeaderOverridesList(fmt.header_gap_overrides);
+      }
+
       openModal(el.modalSettings);
+      if (window.lucide) lucide.createIcons();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -3336,14 +3347,7 @@
     el.formSettings.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        const formattingPayload = {
-          header_content_gap_pt: clampPt(el.settingHeaderContentGap.value, 6),
-          section_gap_pt: clampPt(el.settingSectionGap.value, 6),
-          entry_gap_pt: clampPt(el.settingEntryGap.value, 6),
-          header_gap_overrides: collectHeaderOverrides(),
-          auto_bold_stats: Boolean(el.settingAutoBoldStats.checked),
-        };
-        const { settings } = await fetchJson('/api/settings', {
+        await fetchJson('/api/settings', {
           method: 'PUT',
           body: JSON.stringify({
             ai: {
@@ -3356,18 +3360,31 @@
               Claude: el.keyClaude.value,
               Other: el.keyOther.value,
             },
-            formatting: formattingPayload,
           }),
         });
-        state.formatting = normalizeFormattingConfig(settings?.formatting || formattingPayload);
-        closeModal(el.modalSettings);
-        showToast('Settings saved.', 'success');
-        if (state.view === 'wizard' && state.data) {
+
+        const hasOpenResume = state.view === 'wizard' && Boolean(state.data);
+        if (hasOpenResume) {
+          state.data.formatting = normalizeFormattingConfig({
+            header_content_gap_pt: clampPt(el.settingHeaderContentGap.value, 6),
+            section_gap_pt: clampPt(el.settingSectionGap.value, 6),
+            entry_gap_pt: clampPt(el.settingEntryGap.value, 6),
+            header_gap_overrides: collectHeaderOverrides(),
+            auto_bold_stats: Boolean(el.settingAutoBoldStats.checked),
+          });
           renderPreview();
+          if (!state.isNewResume && state.activeResumeId) {
+            await saveCurrentResume({ saveMode: 'autosave', silent: true });
+          } else {
+            setDirty(true);
+          }
           if (state.previewMode === 'pdf') {
             refreshNativePdfPreview();
           }
         }
+
+        closeModal(el.modalSettings);
+        showToast(hasOpenResume ? 'AI & resume formatting settings saved.' : 'Global AI settings saved.', 'success');
         if (state.aiOpen || state.editorMode === 'ai') {
           await refreshAiSettingsStatus();
           if (state.aiOpen) renderAiQuickChips();
@@ -3447,7 +3464,7 @@
 
     // Interactive Tour Triggers & Controls
     if (el.btnDirTour) el.btnDirTour.addEventListener('click', () => startTour(0));
-    if (el.btnWizTour) el.btnWizTour.addEventListener('click', () => startTour(5));
+    if (el.btnWizTour) el.btnWizTour.addEventListener('click', () => startTour(3));
     if (el.btnStartWelcomeTour) {
       el.btnStartWelcomeTour.addEventListener('click', () => {
         localStorage.setItem('rb_tour_completed', '1');
@@ -3616,40 +3633,55 @@
       },
     },
     {
-      title: '3. Settings: AI Providers & Local Keys',
+      title: '3. Global Settings: AI Providers & Local Keys',
       body: `
-        <p>AI features are completely optional and run using your own API key saved locally in <code>settings.json</code>.</p>
+        <p>Your AI provider, model, and API keys are <strong>global</strong> across the whole app (stored locally in <code>settings.json</code>).</p>
         <ul>
-          <li>Pick <strong>OpenAI</strong> (e.g. <code>gpt-4o-mini</code>), <strong>Google Gemini</strong>, or <strong>Anthropic Claude</strong>.</li>
-          <li>Paste your key for whichever provider you want active, then click <strong>Save Settings</strong>.</li>
+          <li>Pick <strong>OpenAI</strong> (e.g. <code>gpt-4o-mini</code>), <strong>Google Gemini</strong>, or <strong>Anthropic Claude</strong>, or leave blank if you only use manual editing.</li>
+          <li><em>Note:</em> Spacing and bolding settings are saved <strong>per resume</strong>—open any resume to customize those.</li>
         </ul>
       `,
       selector: () => '#modalSettings .form-grid-2',
       prepare: async () => {
+        showTourDirectoryUiOnly();
         await openSettingsModal();
         const mb = el.modalSettings.querySelector('.modal-body');
         if (mb) mb.scrollTop = 0;
       },
     },
     {
-      title: '4. Settings: Custom Spacing & Per-Header Overrides',
+      title: '4. Manual Wizard ↔ AI Builder Sync',
       body: `
-        <p>Control exact typography gaps (in <code>pt</code>) across both the Live Preview and Word/PDF exports:</p>
+        <p>Inside a resume workspace, switch tabs anytime between <strong>Manual Wizard</strong> and <strong>AI Builder</strong>.</p>
+        <p>Both edit the exact same live resume—any changes you make in one mode appear immediately in the other.</p>
+      `,
+      selector: () => '.editor-mode-bar',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(1);
+      },
+    },
+    {
+      title: '5. Per-Resume Spacing & Per-Header Overrides',
+      body: `
+        <p>When you open <strong>Settings</strong> inside a resume, you can tailor layout gaps <strong>specifically for this resume</strong> (saved in SQLite &amp; JSON exports):</p>
         <ul>
-          <li><strong>Under Headers / Between Sections / Between Entries:</strong> Standardized to <code>6pt</code> by default so Summary, Experience, and Skills align cleanly.</li>
-          <li><strong>Per-Header Gap Overrides:</strong> Click <strong>Add Override</strong> to set a custom gap for any specific header (e.g. <code>SKILLS: 3pt</code>).</li>
+          <li><strong>Under Headers / Between Sections / Between Entries:</strong> Standardized to <code>6pt</code> by default so Summary, Experience, and Skills match.</li>
+          <li><strong>Per-Header Gap Overrides:</strong> Click <strong>Add Override</strong> to set a custom gap for one specific header (e.g. <code>SKILLS: 3pt</code>) without affecting your other resumes.</li>
         </ul>
       `,
       selector: () => '#modalSettings .form-grid-3',
       prepare: async () => {
+        await ensureTourWorkspaceReady();
         if (el.modalSettings.hidden) await openSettingsModal();
         el.settingHeaderContentGap?.scrollIntoView({ block: 'center' });
       },
     },
     {
-      title: '5. Settings: Auto-Bold Statistics & Markdown',
+      title: '6. Per-Resume Auto-Bold Statistics & Markdown',
       body: `
-        <p>Highlight measurable impact effortlessly:</p>
+        <p>Enable or disable <strong>Auto-bold statistics</strong> independently for each resume:</p>
         <ul>
           <li><strong>Auto-bold statistics:</strong> Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; tech versions).</li>
           <li><strong>Manual Markdown:</strong> Wrap text in <code>**bold**</code> anytime—if a bullet has manual <code>**...**</code>, auto-bold skips the rest of that bullet. Prefix a stat with <code>\\</code> (e.g. <code>\\24-bed</code>) to ignore it.</li>
@@ -3658,21 +3690,9 @@
       selector: () => '#settingAutoBoldStats',
       selectorClosest: '.form-toggle-row',
       prepare: async () => {
+        await ensureTourWorkspaceReady();
         if (el.modalSettings.hidden) await openSettingsModal();
         el.settingAutoBoldStats?.scrollIntoView({ block: 'center' });
-      },
-    },
-    {
-      title: '6. Manual Wizard ↔ AI Builder Sync',
-      body: `
-        <p>Inside the workspace, switch tabs anytime between <strong>Manual Wizard</strong> and <strong>AI Builder</strong>.</p>
-        <p>Both edit the exact same live resume—any changes you make in one mode appear immediately in the other.</p>
-      `,
-      selector: () => '.editor-mode-bar',
-      prepare: async () => {
-        await ensureTourWorkspaceReady();
-        setEditorMode('manual');
-        goToWizardStep(1);
       },
     },
     {

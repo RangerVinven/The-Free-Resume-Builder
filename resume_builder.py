@@ -17,6 +17,7 @@ from db import (
     init_db,
     list_resumes_db,
     make_slug,
+    normalize_formatting_settings,
     normalize_resume_schema,
     revert_version_db,
     update_resume_db,
@@ -27,8 +28,6 @@ console = Console()
 TEMPLATE_PATH = Path('Base_Template.docx')
 _DATA_DIR = Path(os.environ['DATA_DIR']) if os.environ.get('DATA_DIR') else Path('.')
 SETTINGS_PATH = Path(os.environ['SETTINGS_PATH']) if os.environ.get('SETTINGS_PATH') else _DATA_DIR / 'settings.json'
-
-DEFAULT_GAP_PT = 6.0
 
 _STAT_PATTERN = re.compile(
     r'(?<![A-Za-z0-9_\\/\x00-])'
@@ -74,49 +73,9 @@ def save_settings(data):
         json.dump(data, f, indent=4)
 
 
-def _clamp_pt(value, default: float = DEFAULT_GAP_PT) -> float:
-    try:
-        num = float(value)
-    except (TypeError, ValueError):
-        return default
-    return round(max(0.0, min(24.0, num)), 2)
-
-
-def normalize_formatting_settings(raw_fmt: dict | None) -> dict:
-    """Normalize formatting settings with backward compatibility for standardize_skills_gap."""
-    fmt = raw_fmt if isinstance(raw_fmt, dict) else {}
-    header_gap = _clamp_pt(fmt.get("header_content_gap_pt"), DEFAULT_GAP_PT)
-    section_gap = _clamp_pt(fmt.get("section_gap_pt"), DEFAULT_GAP_PT)
-    entry_gap = _clamp_pt(fmt.get("entry_gap_pt"), DEFAULT_GAP_PT)
-
-    overrides: dict[str, float] = {}
-    raw_overrides = fmt.get("header_gap_overrides")
-    if isinstance(raw_overrides, dict):
-        for k, v in raw_overrides.items():
-            title = str(k or "").strip().upper()
-            if title:
-                overrides[title] = _clamp_pt(v, header_gap)
-    elif fmt.get("standardize_skills_gap") is False:
-        overrides["SKILLS"] = 0.0
-        overrides["TECHNICAL SKILLS"] = 0.0
-
-    return {
-        "header_content_gap_pt": header_gap,
-        "section_gap_pt": section_gap,
-        "entry_gap_pt": entry_gap,
-        "header_gap_overrides": overrides,
-        "auto_bold_stats": bool(fmt.get("auto_bold_stats", False)),
-    }
-
-
-def get_formatting_settings() -> dict:
-    """Load and normalize global formatting settings from settings.json."""
-    return normalize_formatting_settings(load_settings().get("formatting"))
-
-
 def build_render_context(data: dict) -> dict:
-    """Attach global formatting settings to a copy of the resume payload before rendering."""
-    fmt = get_formatting_settings()
+    """Attach per-resume formatting settings to a copy of the resume payload before rendering."""
+    fmt = normalize_formatting_settings(data.get("formatting") if isinstance(data, dict) else None)
     skills_gap = fmt["header_gap_overrides"].get("SKILLS", fmt["header_content_gap_pt"])
     return {
         **data,
@@ -288,9 +247,9 @@ def _postprocess_rendered_docx(docx_doc, normalized_data: dict, fmt: dict) -> No
 
 
 def render_resume_docx(data: dict, out_path: Path) -> Path:
-    """Render a resume dictionary into Base_Template.docx with formatting settings applied."""
+    """Render a resume dictionary into Base_Template.docx with per-resume formatting applied."""
     normalized = normalize_resume_schema(data)
-    fmt = get_formatting_settings()
+    fmt = normalized["formatting"]
     doc = DocxTemplate(TEMPLATE_PATH)
     doc.render(build_render_context(normalized), autoescape=True)
     _postprocess_rendered_docx(doc.docx, normalized, fmt)

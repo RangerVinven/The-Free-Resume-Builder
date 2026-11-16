@@ -17,6 +17,42 @@ LEGACY_RESUMES_DIR = (
     Path(os.environ["LEGACY_RESUMES_DIR"]) if os.environ.get("LEGACY_RESUMES_DIR") else Path("resumes")
 )
 AUTO_CHECKPOINT_INTERVAL_SECONDS = 180
+DEFAULT_GAP_PT = 6.0
+
+
+def _clamp_pt(value: Any, default: float = DEFAULT_GAP_PT) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return round(max(0.0, min(24.0, num)), 2)
+
+
+def normalize_formatting_settings(raw_fmt: dict | None) -> dict:
+    """Normalize per-resume formatting settings with backward compatibility."""
+    fmt = raw_fmt if isinstance(raw_fmt, dict) else {}
+    header_gap = _clamp_pt(fmt.get("header_content_gap_pt"), DEFAULT_GAP_PT)
+    section_gap = _clamp_pt(fmt.get("section_gap_pt"), DEFAULT_GAP_PT)
+    entry_gap = _clamp_pt(fmt.get("entry_gap_pt"), DEFAULT_GAP_PT)
+
+    overrides: dict[str, float] = {}
+    raw_overrides = fmt.get("header_gap_overrides")
+    if isinstance(raw_overrides, dict):
+        for k, v in raw_overrides.items():
+            title = str(k or "").strip().upper()
+            if title:
+                overrides[title] = _clamp_pt(v, header_gap)
+    elif fmt.get("standardize_skills_gap") is False:
+        overrides["SKILLS"] = 0.0
+        overrides["TECHNICAL SKILLS"] = 0.0
+
+    return {
+        "header_content_gap_pt": header_gap,
+        "section_gap_pt": section_gap,
+        "entry_gap_pt": entry_gap,
+        "header_gap_overrides": overrides,
+        "auto_bold_stats": bool(fmt.get("auto_bold_stats", False)),
+    }
 
 
 def _now_str() -> str:
@@ -209,6 +245,14 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                 }],
             })
 
+    if isinstance(src.get("formatting"), dict):
+        raw_fmt = src.get("formatting")
+    elif isinstance(existing_data, dict) and isinstance(existing_data.get("formatting"), dict):
+        raw_fmt = existing_data.get("formatting")
+    else:
+        raw_fmt = None
+    normalized["formatting"] = normalize_formatting_settings(raw_fmt)
+
     if isinstance(existing_data, dict) and "_history" in existing_data:
         normalized["_history"] = existing_data["_history"]
 
@@ -245,6 +289,7 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 portfolio TEXT NOT NULL DEFAULT '',
                 linkedin TEXT NOT NULL DEFAULT '',
                 sections_json TEXT NOT NULL DEFAULT '[]',
+                formatting_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -279,6 +324,9 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 ON ai_chats(resume_id, updated_at);
             """
         )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(resumes)").fetchall()}
+        if "formatting_json" not in cols:
+            conn.execute("ALTER TABLE resumes ADD COLUMN formatting_json TEXT NOT NULL DEFAULT '{}' ")
 
     migrate_legacy_json_resumes(db_path=db_path, legacy_dir=legacy_dir)
 
@@ -317,11 +365,12 @@ def migrate_legacy_json_resumes(
             mtime_str = datetime.fromtimestamp(json_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
             slug = make_slug(clean_current["name"] or json_file.stem)
             sections_str = json.dumps(clean_current["sections"])
+            formatting_str = json.dumps(clean_current["formatting"])
 
             cur = conn.execute(
                 """
-                INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, formatting_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     slug,
@@ -331,6 +380,7 @@ def migrate_legacy_json_resumes(
                     clean_current["portfolio"],
                     clean_current["linkedin"],
                     sections_str,
+                    formatting_str,
                     mtime_str,
                     mtime_str,
                 ),
@@ -384,6 +434,10 @@ def migrate_legacy_json_resumes(
 
 def _row_to_resume_dict(row: sqlite3.Row, versions: list[sqlite3.Row]) -> dict:
     sections = json.loads(row["sections_json"] or "[]")
+    try:
+        raw_fmt = json.loads(row["formatting_json"] or "{}") if "formatting_json" in row.keys() else {}
+    except Exception:
+        raw_fmt = {}
     history = []
     for v in versions:
         history.append({
@@ -400,6 +454,7 @@ def _row_to_resume_dict(row: sqlite3.Row, versions: list[sqlite3.Row]) -> dict:
         "portfolio": row["portfolio"],
         "linkedin": row["linkedin"],
         "sections": sections,
+        "formatting": normalize_formatting_settings(raw_fmt),
         "_history": history,
     }
 
@@ -461,13 +516,14 @@ def create_resume_db(
     now = _now_str()
     slug = make_slug(clean["name"])
     sections_str = json.dumps(clean["sections"])
+    formatting_str = json.dumps(clean["formatting"])
     snapshot_str = json.dumps(clean)
 
     with get_connection(db_path) as conn:
         cur = conn.execute(
             """
-            INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, formatting_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -477,6 +533,7 @@ def create_resume_db(
                 clean["portfolio"],
                 clean["linkedin"],
                 sections_str,
+                formatting_str,
                 now,
                 now,
             ),
@@ -581,13 +638,20 @@ def update_resume_db(
         # Preserve existing non-empty name if transient blank input occurs mid-edit
         effective_name = clean["name"] or row["name"]
         clean["name"] = effective_name
+        if not isinstance(payload, dict) or not isinstance(payload.get("formatting"), dict):
+            try:
+                existing_fmt = json.loads(row["formatting_json"] or "{}") if "formatting_json" in row.keys() else {}
+            except Exception:
+                existing_fmt = {}
+            clean["formatting"] = normalize_formatting_settings(existing_fmt)
         slug = make_slug(effective_name)
         sections_str = json.dumps(clean["sections"])
+        formatting_str = json.dumps(clean["formatting"])
 
         conn.execute(
             """
             UPDATE resumes
-            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, updated_at = ?
+            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, formatting_json = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -598,6 +662,7 @@ def update_resume_db(
                 clean["portfolio"],
                 clean["linkedin"],
                 sections_str,
+                formatting_str,
                 now,
                 resume_id,
             ),
@@ -664,6 +729,10 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
             return None
 
         # Archive current live state before reverting if it differs from latest saved snapshot
+        try:
+            live_fmt = json.loads(res_row["formatting_json"] or "{}") if "formatting_json" in res_row.keys() else {}
+        except Exception:
+            live_fmt = {}
         current_live = _strip_history({
             "name": res_row["name"],
             "phone": res_row["phone"],
@@ -671,6 +740,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
             "portfolio": res_row["portfolio"],
             "linkedin": res_row["linkedin"],
             "sections": json.loads(res_row["sections_json"] or "[]"),
+            "formatting": live_fmt,
         })
         last_ver = conn.execute(
             "SELECT version_num, snapshot_json FROM resume_versions WHERE resume_id = ? ORDER BY version_num DESC, id DESC LIMIT 1",
@@ -692,7 +762,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
         conn.execute(
             """
             UPDATE resumes
-            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, updated_at = ?
+            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, formatting_json = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -703,6 +773,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
                 restored["portfolio"],
                 restored["linkedin"],
                 json.dumps(restored["sections"]),
+                json.dumps(restored["formatting"]),
                 now,
                 resume_id,
             ),
