@@ -44,6 +44,15 @@ def save_settings(data):
         json.dump(data, f, indent=4)
 
 
+def build_render_context(data: dict) -> dict:
+    """Attach global formatting settings to a copy of the resume payload before rendering."""
+    formatting = load_settings().get("formatting") or {}
+    return {
+        **data,
+        "standardize_skills_gap": bool(formatting.get("standardize_skills_gap", True)),
+    }
+
+
 def confirm_deletion(item_name):
     if questionary.confirm(f"Are you sure you want to delete {item_name}?").ask():
         if questionary.confirm("ARE YOU SURE?").ask():
@@ -398,7 +407,7 @@ def generate_resume(data, out_stem=None):
         return
 
     doc = DocxTemplate(TEMPLATE_PATH)
-    doc.render(data)
+    doc.render(build_render_context(data), autoescape=True)
     out_docx = Path(f"{stem}_generated.docx")
     doc.save(out_docx)
     if fmt == "DOCX":

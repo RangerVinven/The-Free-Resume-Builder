@@ -7,3 +7,5 @@ resumes.db*
 settings.json
 data/
 .DS_Store
+docker-compose.override.yml
+.local/

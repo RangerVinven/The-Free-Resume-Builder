@@ -32,6 +32,7 @@ from db import (
 )
 from resume_builder import (
     TEMPLATE_PATH,
+    build_render_context,
     load_settings,
     save_settings,
 )
@@ -62,7 +63,7 @@ def _render_resume_bytes(data: dict, stem: str, fmt: str) -> BytesIO | None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_docx = Path(tmpdir) / f"{stem}_generated.docx"
         doc = DocxTemplate(TEMPLATE_PATH)
-        doc.render(data)
+        doc.render(build_render_context(data), autoescape=True)
         doc.save(tmp_docx)
 
         if fmt == "docx":
@@ -372,6 +373,10 @@ def get_settings_api():
         "provider": ai_cfg.get("provider", "OpenAI"),
         "model": ai_cfg.get("model", "gpt-4o-mini"),
     })
+    fmt_cfg = settings.get("formatting", {})
+    settings["formatting"] = {
+        "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
+    }
     return jsonify({"settings": settings})
 
 
@@ -388,6 +393,11 @@ def update_settings_api():
         settings["ai"] = {
             "provider": (ai_cfg.get("provider") or "OpenAI").strip(),
             "model": (ai_cfg.get("model") or "gpt-4o-mini").strip(),
+        }
+    fmt_cfg = payload.get("formatting")
+    if isinstance(fmt_cfg, dict):
+        settings["formatting"] = {
+            "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
         }
     save_settings(settings)
     return jsonify({"settings": settings})

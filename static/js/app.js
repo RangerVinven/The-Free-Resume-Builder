@@ -30,6 +30,7 @@
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
+    formatting: { standardize_skills_gap: true },
     editorMode: 'manual', // 'manual' | 'ai'
     fullAiChats: [], // [{ id, title, message_count, updated_at }]
     activeFullAiChatId: null,
@@ -167,6 +168,7 @@
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
+    settingStandardizeSkillsGap: document.getElementById('settingStandardizeSkillsGap'),
 
     modalCreateMode: document.getElementById('modalCreateMode'),
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
@@ -1860,7 +1862,7 @@
 
     let html = `
       <h1 class="paper-name">${escapeHtml(d.name || 'Your Name')}</h1>
-      <p class="paper-contact">${contactParts.join(' | ')}</p>
+      <p class="paper-contact">&nbsp;${contactParts.join(' | ')}</p>
     `;
 
     (d.sections || []).forEach((sec) => {
@@ -1868,10 +1870,13 @@
       html += `<h2 class="paper-section-title">${escapeHtml((sec.title || '').toUpperCase())}</h2>`;
 
       if (sec.is_skills) {
-        (sec.items || []).forEach((skill) => {
-          html += `<p class="paper-skill-row"><span class="paper-skill-cat">${escapeHtml(skill.category || '')}:</span> ${escapeHtml(skill.text || '')}</p>`;
+        const addFirstGap = state.formatting?.standardize_skills_gap !== false;
+        (sec.items || []).forEach((skill, skillIdx) => {
+          const firstClass = skillIdx === 0 && addFirstGap ? ' paper-skill-row-first' : '';
+          html += `<p class="paper-skill-row${firstClass}"><span class="paper-skill-cat">${escapeHtml(skill.category || '')}:</span> ${escapeHtml(skill.text || '')}</p>`;
         });
       } else {
+        const isProjectSection = (sec.title || '').toLowerCase().includes('project');
         (sec.items || []).forEach((item) => {
           html += `<div class="paper-item">`;
 
@@ -1882,10 +1887,13 @@
               leftHeader += `<span class="paper-item-role">${escapeHtml(item.role)}</span>`;
             }
             if (item.company) {
-              leftHeader += `${item.role ? ', ' : ''}${escapeHtml(item.company)}`;
+              const companyHtml = isProjectSection
+                ? `<span class="paper-item-company-italic">${escapeHtml(item.company)}</span>`
+                : escapeHtml(item.company);
+              leftHeader += `${item.role ? ', ' : ''}${companyHtml}`;
             }
             if (item.location) {
-              leftHeader += ` &ndash; ${escapeHtml(item.location)}`;
+              leftHeader += `<span class="paper-item-location"> &ndash; ${escapeHtml(item.location)}</span>`;
             }
             html += `
               <div class="paper-item-header">
@@ -2059,12 +2067,16 @@
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
+      const fmt = settings.formatting || {};
       const provider = PROVIDER_DEFAULTS[ai.provider] ? ai.provider : 'OpenAI';
       const defaultModel = PROVIDER_DEFAULTS[provider].model;
       state.aiConfig = {
         provider,
         model: (ai.model || '').trim() || defaultModel,
         hasActiveKey: Boolean((keys[provider] || '').trim()),
+      };
+      state.formatting = {
+        standardize_skills_gap: fmt.standardize_skills_gap !== false,
       };
     } catch {
       // Leave existing config on transient failure
@@ -2754,6 +2766,7 @@
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
+      const fmt = settings.formatting || {};
       el.aiProviderSelect.value = ai.provider || 'OpenAI';
       el.aiModelInput.value = ai.model || (PROVIDER_DEFAULTS[el.aiProviderSelect.value]?.model || 'gpt-4o-mini');
       syncSettingsProviderFields(false);
@@ -2761,6 +2774,7 @@
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
       el.keyOther.value = keys.Other || '';
+      el.settingStandardizeSkillsGap.checked = fmt.standardize_skills_gap !== false;
       openModal(el.modalSettings);
     } catch (err) {
       showToast(err.message, 'error');
@@ -2972,6 +2986,7 @@
     el.formSettings.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
+        const standardizeSkillsGap = Boolean(el.settingStandardizeSkillsGap.checked);
         await fetchJson('/api/settings', {
           method: 'PUT',
           body: JSON.stringify({
@@ -2985,10 +3000,20 @@
               Claude: el.keyClaude.value,
               Other: el.keyOther.value,
             },
+            formatting: {
+              standardize_skills_gap: standardizeSkillsGap,
+            },
           }),
         });
+        state.formatting = { standardize_skills_gap: standardizeSkillsGap };
         closeModal(el.modalSettings);
         showToast('Settings saved.', 'success');
+        if (state.view === 'wizard' && state.data) {
+          renderLivePreview();
+          if (state.previewMode === 'pdf') {
+            refreshNativePdfPreview();
+          }
+        }
         if (state.aiOpen || state.editorMode === 'ai') {
           await refreshAiSettingsStatus();
           if (state.aiOpen) renderAiQuickChips();
@@ -3072,6 +3097,7 @@
     if (window.lucide) lucide.createIcons();
     updateZoom();
     bindEvents();
+    await refreshAiSettingsStatus();
     try {
       const params = new URLSearchParams(window.location.search);
       const resumeParam = params.get('resume');

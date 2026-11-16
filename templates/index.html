@@ -350,7 +350,7 @@
               <div id="stage4" class="wizard-stage" hidden>
                 <div class="stage-intro">
                   <h2>Review &amp; Export</h2>
-                  <p>Verify document completeness, preview the rendered Microsoft Word PDF, or manage version history.</p>
+                  <p>Verify document completeness, preview the rendered PDF, or manage version history.</p>
                 </div>
 
                 <!-- Completeness Preflight Checklist -->
@@ -383,7 +383,7 @@
                       </button>
                       <button type="button" id="btnStage4PreviewPdf" class="btn btn-secondary">
                         <i data-lucide="eye"></i>
-                        <span>Render Word PDF Preview</span>
+                        <span>Render PDF Preview</span>
                       </button>
                       <button type="button" id="btnStage4Docx" class="btn btn-secondary">
                         <i data-lucide="file-down"></i>
@@ -509,7 +509,7 @@
           <div class="preview-toolbar">
             <div class="segmented-control" role="group" aria-label="Preview Mode">
               <button id="modeLiveHtml" class="segmented-btn active">Live Layout</button>
-              <button id="modeNativePdf" class="segmented-btn">Word PDF Render</button>
+              <button id="modeNativePdf" class="segmented-btn">PDF Render</button>
             </div>
 
             <div class="preview-controls">
@@ -539,7 +539,7 @@
             <div id="pdfPreviewWrapper" class="pdf-wrapper" hidden>
               <div id="pdfLoadingState" class="pdf-loading" hidden>
                 <div class="spinner"></div>
-                <p>Generating Word PDF preview...</p>
+                <p>Generating PDF preview...</p>
               </div>
               <iframe id="pdfFrame" class="pdf-frame" title="Rendered Resume PDF"></iframe>
             </div>
@@ -736,6 +736,16 @@
             <div class="form-field">
               <label for="keyOther">Other API Key <span class="label-optional">(optional)</span></label>
               <input id="keyOther" type="password" class="input-control" placeholder="Custom key..." autocomplete="off" />
+            </div>
+            <div class="settings-divider"></div>
+            <div class="form-field">
+              <label class="form-toggle-row" for="settingStandardizeSkillsGap">
+                <input id="settingStandardizeSkillsGap" type="checkbox" checked />
+                <span>
+                  <span class="form-toggle-title">Standardize spacing under Skills header</span>
+                  <span class="form-toggle-hint">Add the same 6pt gap below key-value headers (like Skills) as standard experience and project sections.</span>
+                </span>
+              </label>
             </div>
           </div>
         </div>
