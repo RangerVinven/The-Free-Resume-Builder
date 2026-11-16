@@ -56,8 +56,10 @@
     wizardTopActions: document.getElementById('wizardTopActions'),
     importJsonFileInput: document.getElementById('importJsonFileInput'),
     btnDirImportJson: document.getElementById('btnDirImportJson'),
+    btnDirTour: document.getElementById('btnDirTour'),
     btnDirSettings: document.getElementById('btnDirSettings'),
     btnDirNewResume: document.getElementById('btnDirNewResume'),
+    btnWizTour: document.getElementById('btnWizTour'),
     btnWizSettings: document.getElementById('btnWizSettings'),
     saveStatus: document.getElementById('saveStatus'),
     saveStatusText: document.getElementById('saveStatusText'),
@@ -192,6 +194,21 @@
     modalCreateMode: document.getElementById('modalCreateMode'),
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
     btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
+
+    // Interactive Tour
+    tourWelcomeBanner: document.getElementById('tourWelcomeBanner'),
+    btnStartWelcomeTour: document.getElementById('btnStartWelcomeTour'),
+    btnDismissWelcomeTour: document.getElementById('btnDismissWelcomeTour'),
+    tourOverlay: document.getElementById('tourOverlay'),
+    tourSpotlight: document.getElementById('tourSpotlight'),
+    tourPopover: document.getElementById('tourPopover'),
+    tourStepCounter: document.getElementById('tourStepCounter'),
+    tourStepTitle: document.getElementById('tourStepTitle'),
+    tourStepBody: document.getElementById('tourStepBody'),
+    btnTourClose: document.getElementById('btnTourClose'),
+    btnTourSkip: document.getElementById('btnTourSkip'),
+    btnTourPrev: document.getElementById('btnTourPrev'),
+    btnTourNext: document.getElementById('btnTourNext'),
 
     // Full-Resume AI Builder View
     aiChatsSidebar: document.getElementById('aiChatsSidebar'),
@@ -638,6 +655,10 @@
     el.wizardTopContext.hidden = true;
     el.wizardTopActions.hidden = true;
     el.directoryTopActions.hidden = false;
+
+    if (el.tourWelcomeBanner) {
+      el.tourWelcomeBanner.hidden = Boolean(localStorage.getItem('rb_tour_completed'));
+    }
 
     await loadResumeList();
   }
@@ -3422,6 +3443,458 @@
       el.tabEditor.classList.remove('active');
       el.previewPane.classList.remove('mobile-hidden');
       el.editorPane.classList.add('mobile-hidden');
+    });
+
+    // Interactive Tour Triggers & Controls
+    if (el.btnDirTour) el.btnDirTour.addEventListener('click', () => startTour(0));
+    if (el.btnWizTour) el.btnWizTour.addEventListener('click', () => startTour(5));
+    if (el.btnStartWelcomeTour) {
+      el.btnStartWelcomeTour.addEventListener('click', () => {
+        localStorage.setItem('rb_tour_completed', '1');
+        if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+        startTour(0);
+      });
+    }
+    if (el.btnDismissWelcomeTour) {
+      el.btnDismissWelcomeTour.addEventListener('click', () => {
+        localStorage.setItem('rb_tour_completed', '1');
+        if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+      });
+    }
+    if (el.btnTourClose) el.btnTourClose.addEventListener('click', endTour);
+    if (el.btnTourSkip) el.btnTourSkip.addEventListener('click', endTour);
+    if (el.btnTourPrev) el.btnTourPrev.addEventListener('click', () => goToTourStep(tourState.stepIdx - 1));
+    if (el.btnTourNext) {
+      el.btnTourNext.addEventListener('click', () => {
+        if (tourState.stepIdx >= TOUR_STEPS.length - 1) {
+          endTour();
+        } else {
+          goToTourStep(tourState.stepIdx + 1);
+        }
+      });
+    }
+    window.addEventListener('resize', () => {
+      if (tourState.active) positionCurrentTourStep();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!tourState.active) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        endTour();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (tourState.stepIdx >= TOUR_STEPS.length - 1) endTour();
+        else goToTourStep(tourState.stepIdx + 1);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (tourState.stepIdx > 0) goToTourStep(tourState.stepIdx - 1);
+      }
+    });
+  }
+
+  // =========================================================
+  // INTERACTIVE VIRTUAL TOUR
+  // =========================================================
+  const TOUR_DEMO_RESUME = {
+    name: 'Elena Vance',
+    phone: '(415) 555-0148',
+    email: 'elena.vance@example.com',
+    portfolio: 'github.com/elenavance',
+    linkedin: 'linkedin.com/in/elenavance',
+    sections: [
+      {
+        title: 'PROFESSIONAL SUMMARY',
+        is_skills: false,
+        items: [{
+          role: '', company: '', location: '', date: '', subtitle: '', subtitle_right: '',
+          details: [{ is_bullet: false, text: 'Cloud security and backend engineer with 6+ years building high-throughput APIs and automated DevSecOps pipelines.' }],
+        }],
+      },
+      {
+        title: 'EXPERIENCE',
+        is_skills: false,
+        items: [{
+          role: 'Senior Security Engineer',
+          company: 'Aegis Cloud Systems',
+          location: 'San Francisco, CA',
+          date: 'Mar 2023 - Present',
+          subtitle: '',
+          subtitle_right: '',
+          details: [
+            { is_bullet: true, text: 'Re-engineered payment queue in Go and RabbitMQ, reducing checkout latency by 60% (1.2s to 450ms) across 50K peak orders.' },
+            { is_bullet: true, text: 'Automated SAST/DAST scanning in GitLab CI/CD with SonarQube and Trivy, cutting remediation time by 35%.' },
+          ],
+        }],
+      },
+      {
+        title: 'TECHNICAL SKILLS',
+        is_skills: true,
+        items: [
+          { category: 'Languages', text: 'Go, Python, TypeScript, SQL' },
+          { category: 'Cloud & Security', text: 'AWS, Kubernetes, Docker, Trivy, SonarQube' },
+        ],
+      },
+    ],
+  };
+
+  const tourState = {
+    active: false,
+    stepIdx: 0,
+    origin: null,
+    demoLoaded: false,
+  };
+
+  function showTourDirectoryUiOnly() {
+    el.directoryView.hidden = false;
+    el.wizardView.hidden = true;
+    el.wizardTopContext.hidden = true;
+    el.wizardTopActions.hidden = true;
+    el.directoryTopActions.hidden = false;
+    closeModal(el.modalSettings);
+  }
+
+  async function ensureTourWorkspaceReady() {
+    closeModal(el.modalSettings);
+    if (state.view === 'wizard' && state.data) {
+      el.directoryView.hidden = true;
+      el.wizardView.hidden = false;
+      el.wizardTopContext.hidden = false;
+      el.wizardTopActions.hidden = false;
+      el.directoryTopActions.hidden = true;
+      return;
+    }
+    if (!tourState.demoLoaded) {
+      if (state.resumes && state.resumes.length > 0) {
+        try {
+          const rec = await fetchJson(`/api/resumes/${encodeURIComponent(state.resumes[0].id)}`);
+          state.data = rec.data;
+          state.activeResumeId = rec.id;
+          state.activeResumeSlug = rec.slug || 'resume';
+          state.isNewResume = false;
+          state.isDirty = false;
+        } catch {
+          state.data = JSON.parse(JSON.stringify(TOUR_DEMO_RESUME));
+          state.isNewResume = true;
+        }
+      } else {
+        state.data = JSON.parse(JSON.stringify(TOUR_DEMO_RESUME));
+        state.isNewResume = true;
+      }
+      tourState.demoLoaded = true;
+    }
+    state.activeSectionIdx = 0;
+    enterWizardView('manual');
+  }
+
+  const TOUR_STEPS = [
+    {
+      title: '1. Local Resume Directory',
+      body: `
+        <p>Every resume and version snapshot lives locally in SQLite (<code>resumes.db</code>) on your machine.</p>
+        <ul>
+          <li><strong>Search</strong> live by candidate name, email, or phone.</li>
+          <li><strong>Edit</strong>, <strong>Duplicate</strong>, or download <strong>DOCX / PDF / JSON</strong> directly from any row.</li>
+        </ul>
+      `,
+      selector: () => (el.directoryList && !el.directoryList.hidden ? '#directoryList' : '#directoryEmpty'),
+      prepare: async () => {
+        showTourDirectoryUiOnly();
+      },
+    },
+    {
+      title: '2. Creating & Importing Resumes',
+      body: `
+        <p>Use the top-right toolbar to get started quickly:</p>
+        <ul>
+          <li><strong>Create New Resume:</strong> Choose between the guided <strong>Manual Wizard</strong> or conversational <strong>AI Builder</strong>.</li>
+          <li><strong>Import JSON:</strong> Load any previously exported <code>.json</code> resume backup straight into your database.</li>
+        </ul>
+      `,
+      selector: () => '#directoryTopActions',
+      prepare: async () => {
+        showTourDirectoryUiOnly();
+      },
+    },
+    {
+      title: '3. Settings: AI Providers & Local Keys',
+      body: `
+        <p>AI features are completely optional and run using your own API key saved locally in <code>settings.json</code>.</p>
+        <ul>
+          <li>Pick <strong>OpenAI</strong> (e.g. <code>gpt-4o-mini</code>), <strong>Google Gemini</strong>, or <strong>Anthropic Claude</strong>.</li>
+          <li>Paste your key for whichever provider you want active, then click <strong>Save Settings</strong>.</li>
+        </ul>
+      `,
+      selector: () => '#modalSettings .form-grid-2',
+      prepare: async () => {
+        await openSettingsModal();
+        const mb = el.modalSettings.querySelector('.modal-body');
+        if (mb) mb.scrollTop = 0;
+      },
+    },
+    {
+      title: '4. Settings: Custom Spacing & Per-Header Overrides',
+      body: `
+        <p>Control exact typography gaps (in <code>pt</code>) across both the Live Preview and Word/PDF exports:</p>
+        <ul>
+          <li><strong>Under Headers / Between Sections / Between Entries:</strong> Standardized to <code>6pt</code> by default so Summary, Experience, and Skills align cleanly.</li>
+          <li><strong>Per-Header Gap Overrides:</strong> Click <strong>Add Override</strong> to set a custom gap for any specific header (e.g. <code>SKILLS: 3pt</code>).</li>
+        </ul>
+      `,
+      selector: () => '#modalSettings .form-grid-3',
+      prepare: async () => {
+        if (el.modalSettings.hidden) await openSettingsModal();
+        el.settingHeaderContentGap?.scrollIntoView({ block: 'center' });
+      },
+    },
+    {
+      title: '5. Settings: Auto-Bold Statistics & Markdown',
+      body: `
+        <p>Highlight measurable impact effortlessly:</p>
+        <ul>
+          <li><strong>Auto-bold statistics:</strong> Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; tech versions).</li>
+          <li><strong>Manual Markdown:</strong> Wrap text in <code>**bold**</code> anytime—if a bullet has manual <code>**...**</code>, auto-bold skips the rest of that bullet. Prefix a stat with <code>\\</code> (e.g. <code>\\24-bed</code>) to ignore it.</li>
+        </ul>
+      `,
+      selector: () => '#settingAutoBoldStats',
+      selectorClosest: '.form-toggle-row',
+      prepare: async () => {
+        if (el.modalSettings.hidden) await openSettingsModal();
+        el.settingAutoBoldStats?.scrollIntoView({ block: 'center' });
+      },
+    },
+    {
+      title: '6. Manual Wizard ↔ AI Builder Sync',
+      body: `
+        <p>Inside the workspace, switch tabs anytime between <strong>Manual Wizard</strong> and <strong>AI Builder</strong>.</p>
+        <p>Both edit the exact same live resume—any changes you make in one mode appear immediately in the other.</p>
+      `,
+      selector: () => '.editor-mode-bar',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(1);
+      },
+    },
+    {
+      title: '7. Sections & Layout Formats (Step 2)',
+      body: `
+        <p>In <strong>Step 2 (Sections)</strong>, add presets or custom sections, rename them, and reorder them up or down.</p>
+        <ul>
+          <li><strong>Standard Format:</strong> Used for Professional Summary, Experience, Education, and Projects.</li>
+          <li><strong>Key-Value Format:</strong> Two-column <code>Category: Items</code> rows ideal for Skills and Certifications.</li>
+        </ul>
+      `,
+      selector: () => '#stage2',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(2);
+      },
+    },
+    {
+      title: '8. Bullets, Prose, AI Assist & Safe Delete (Step 3)',
+      body: `
+        <p>In <strong>Step 3 (Content)</strong>, fill in entries or fine-tune individual lines:</p>
+        <ul>
+          <li><strong>Bullet vs. Prose:</strong> Toggle any detail row—leave Role/Company/Date blank + <strong>Prose</strong> for a clean Summary paragraph.</li>
+          <li><strong>Draft with AI / Assist:</strong> Get Google XYZ coaching and 1-line rewrites for any bullet.</li>
+          <li><strong>Safe Delete:</strong> Clicking <code>×</code> opens an <em>"Are you sure?"</em> confirmation dialog so you never lose a bullet by accident.</li>
+        </ul>
+      `,
+      selector: () => {
+        const container = document.getElementById('activeSectionContainer');
+        return container && container.children.length > 0 ? '#activeSectionContainer' : '#stage3';
+      },
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        const sections = state.data?.sections || [];
+        const expIdx = sections.findIndex((s) => !s.is_skills && (s.items || []).length > 0);
+        state.activeSectionIdx = expIdx >= 0 ? expIdx : 0;
+        goToWizardStep(3);
+      },
+    },
+    {
+      title: '9. Conversational AI Builder & Undo',
+      body: `
+        <p>Prefer chatting? Describe your background, target job, or edits in plain English and the AI populates your resume in real time.</p>
+        <ul>
+          <li>Saved conversations live in the <strong>Saved Chats</strong> sidebar.</li>
+          <li>Use <strong>Undo Last Edit</strong> anytime to revert the latest AI change in one click.</li>
+        </ul>
+      `,
+      selector: () => '#aiBuilderView',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('ai');
+      },
+    },
+    {
+      title: '10. Live Layout, Page Counter & PDF Render',
+      body: `
+        <p>The right pane gives you real-time visual feedback in Cambria/Caladea:</p>
+        <ul>
+          <li><strong>Page Badge &amp; Break Line:</strong> Tracks US Letter length (<code>1 Page</code> vs. <code>~2 Pages Overflow</code>) and draws a dashed page-break line if you spill onto Page 2.</li>
+          <li><strong>PDF Render:</strong> Click <strong>PDF Render</strong> to inspect the exact LibreOffice/Word paginated PDF before exporting.</li>
+        </ul>
+      `,
+      selector: () => '#previewPane .preview-toolbar',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(1);
+        setPreviewMode('live');
+      },
+    },
+    {
+      title: '11. Auto-Save, History & Exports',
+      body: `
+        <p>Your work is protected automatically as you type:</p>
+        <ul>
+          <li><strong>Save Snapshot (<code>Cmd+S</code> / <code>Ctrl+S</code>):</strong> Create named checkpoints anytime.</li>
+          <li><strong>History:</strong> Inspect, export, or restore any earlier snapshot without losing safety.</li>
+          <li><strong>DOCX / PDF / JSON:</strong> Export publication-ready Word and PDF files from <code>Base_Template.docx</code>, or replay this tour anytime via the compass icon.</li>
+        </ul>
+      `,
+      selector: () => '#wizardTopActions',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+      },
+    },
+  ];
+
+  async function startTour(startIndex = 0) {
+    tourState.active = true;
+    tourState.demoLoaded = false;
+    tourState.origin = {
+      view: state.view,
+      wizardStep: state.wizardStep,
+      editorMode: state.editorMode,
+      previewMode: state.previewMode,
+      activeSectionIdx: state.activeSectionIdx,
+      settingsOpen: !el.modalSettings.hidden,
+    };
+    el.tourOverlay.hidden = false;
+    await goToTourStep(startIndex);
+  }
+
+  async function endTour() {
+    if (!tourState.active) return;
+    tourState.active = false;
+    el.tourOverlay.hidden = true;
+    closeModal(el.modalSettings);
+    localStorage.setItem('rb_tour_completed', '1');
+    if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+
+    const orig = tourState.origin;
+    if (orig) {
+      if (orig.view === 'directory') {
+        if (tourState.demoLoaded) {
+          state.data = null;
+          state.activeResumeId = null;
+          state.isNewResume = false;
+          state.isDirty = false;
+        }
+        showTourDirectoryUiOnly();
+      } else {
+        el.directoryView.hidden = true;
+        el.wizardView.hidden = false;
+        el.wizardTopContext.hidden = false;
+        el.wizardTopActions.hidden = false;
+        el.directoryTopActions.hidden = true;
+        state.activeSectionIdx = orig.activeSectionIdx || 0;
+        setEditorMode(orig.editorMode || 'manual');
+        goToWizardStep(orig.wizardStep || 1);
+        setPreviewMode(orig.previewMode || 'live');
+      }
+      if (orig.settingsOpen) {
+        await openSettingsModal();
+      }
+    }
+    tourState.origin = null;
+    tourState.demoLoaded = false;
+  }
+
+  function positionCurrentTourStep() {
+    const step = TOUR_STEPS[tourState.stepIdx];
+    if (!step) return;
+    const rawSel = typeof step.selector === 'function' ? step.selector() : step.selector;
+    let targetEl = rawSel ? document.querySelector(rawSel) : null;
+    if (targetEl && step.selectorClosest) {
+      targetEl = targetEl.closest(step.selectorClosest) || targetEl;
+    }
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const popEl = el.tourPopover;
+    const spotEl = el.tourSpotlight;
+
+    if (!targetEl) {
+      spotEl.style.top = '50%';
+      spotEl.style.left = '50%';
+      spotEl.style.width = '0px';
+      spotEl.style.height = '0px';
+      popEl.style.top = `${Math.max(16, (vh - popEl.offsetHeight) / 2)}px`;
+      popEl.style.left = `${Math.max(16, (vw - popEl.offsetWidth) / 2)}px`;
+      return;
+    }
+
+    const rect = targetEl.getBoundingClientRect();
+    const pad = 6;
+    const sTop = Math.max(4, rect.top - pad);
+    const sLeft = Math.max(4, rect.left - pad);
+    const sWidth = Math.min(vw - sLeft - 4, rect.width + pad * 2);
+    const sHeight = Math.min(vh - sTop - 4, rect.height + pad * 2);
+
+    spotEl.style.top = `${sTop}px`;
+    spotEl.style.left = `${sLeft}px`;
+    spotEl.style.width = `${sWidth}px`;
+    spotEl.style.height = `${sHeight}px`;
+
+    const popW = popEl.offsetWidth || 380;
+    const popH = popEl.offsetHeight || 220;
+    const gap = 14;
+    let pTop = 16;
+    let pLeft = 16;
+
+    if (vh - rect.bottom >= popH + gap + 12) {
+      pTop = rect.bottom + gap;
+      pLeft = Math.min(vw - popW - 12, Math.max(12, rect.left));
+    } else if (rect.top >= popH + gap + 12) {
+      pTop = rect.top - popH - gap;
+      pLeft = Math.min(vw - popW - 12, Math.max(12, rect.left));
+    } else if (vw - rect.right >= popW + gap + 12) {
+      pTop = Math.min(vh - popH - 12, Math.max(12, rect.top));
+      pLeft = rect.right + gap;
+    } else if (rect.left >= popW + gap + 12) {
+      pTop = Math.min(vh - popH - 12, Math.max(12, rect.top));
+      pLeft = rect.left - popW - gap;
+    } else {
+      pTop = vh - popH - 16;
+      pLeft = vw - popW - 16;
+    }
+
+    popEl.style.top = `${Math.max(12, Math.min(vh - popH - 12, pTop))}px`;
+    popEl.style.left = `${Math.max(12, Math.min(vw - popW - 12, pLeft))}px`;
+  }
+
+  async function goToTourStep(idx) {
+    if (idx < 0 || idx >= TOUR_STEPS.length) return;
+    tourState.stepIdx = idx;
+    const step = TOUR_STEPS[idx];
+    if (typeof step.prepare === 'function') {
+      await step.prepare();
+    }
+    el.tourStepCounter.textContent = `Step ${idx + 1} of ${TOUR_STEPS.length}`;
+    el.tourStepTitle.textContent = step.title;
+    el.tourStepBody.innerHTML = step.body;
+    el.btnTourPrev.disabled = idx === 0;
+    el.btnTourNext.textContent = idx === TOUR_STEPS.length - 1 ? 'Finish' : 'Next';
+    if (window.lucide) lucide.createIcons();
+
+    requestAnimationFrame(() => {
+      positionCurrentTourStep();
+      setTimeout(positionCurrentTourStep, 60);
     });
   }
 

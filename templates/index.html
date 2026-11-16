@@ -40,6 +40,10 @@
         <!-- Directory Mode Toolbar -->
         <div id="directoryTopActions" class="topbar-actions-group">
           <input id="importJsonFileInput" type="file" accept=".json,application/json" hidden />
+          <button id="btnDirTour" class="btn btn-ghost btn-sm" title="Take an interactive tour of Resume Builder">
+            <i data-lucide="compass"></i>
+            <span>Tour</span>
+          </button>
           <button id="btnDirImportJson" class="btn btn-secondary btn-sm" title="Import a resume from an exported JSON file">
             <i data-lucide="upload"></i>
             <span>Import JSON</span>
@@ -72,6 +76,10 @@
             <span id="historyBadge" class="badge-count" hidden>0</span>
           </button>
 
+          <button id="btnWizTour" class="btn btn-ghost btn-sm" title="Interactive Tour" aria-label="Interactive Tour">
+            <i data-lucide="compass"></i>
+          </button>
+
           <button id="btnWizSettings" class="btn btn-ghost btn-sm" title="Settings" aria-label="Settings">
             <i data-lucide="sliders-horizontal"></i>
           </button>
@@ -99,6 +107,20 @@
     <!-- VIEW 1: Resumes Directory -->
     <main id="directoryView" class="directory-view">
       <div class="directory-container">
+        <div id="tourWelcomeBanner" class="tour-welcome-banner" hidden>
+          <div class="tour-welcome-text">
+            <i data-lucide="compass" class="tour-welcome-icon"></i>
+            <div>
+              <strong>New to The Free Resume Builder?</strong>
+              <span>Take a quick 60-second interactive walkthrough covering Manual &amp; AI drafting, Live Page Breaks, PDF Export, and Spacing/Bold Settings.</span>
+            </div>
+          </div>
+          <div class="tour-welcome-actions">
+            <button type="button" id="btnDismissWelcomeTour" class="btn btn-ghost btn-xs">Dismiss</button>
+            <button type="button" id="btnStartWelcomeTour" class="btn btn-primary btn-xs">Start Tour</button>
+          </div>
+        </div>
+
         <div class="directory-header">
           <div>
             <h1 class="directory-title">Resumes</h1>
@@ -849,6 +871,28 @@
             </div>
             <span class="create-mode-cta">Start with AI <i data-lucide="arrow-right"></i></span>
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Virtual Tour Overlay -->
+  <div id="tourOverlay" class="tour-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="tourStepTitle">
+    <div id="tourSpotlight" class="tour-spotlight" aria-hidden="true"></div>
+    <div id="tourPopover" class="tour-popover">
+      <div class="tour-popover-header">
+        <span id="tourStepCounter" class="tour-step-counter">Step 1 of 11</span>
+        <button type="button" id="btnTourClose" class="btn btn-ghost btn-xs" aria-label="Skip tour" title="Exit tour (Esc)">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <h3 id="tourStepTitle" class="tour-step-title"></h3>
+      <div id="tourStepBody" class="tour-step-body"></div>
+      <div class="tour-popover-footer">
+        <button type="button" id="btnTourSkip" class="btn btn-ghost btn-xs">Skip Tour</button>
+        <div class="tour-nav-btns">
+          <button type="button" id="btnTourPrev" class="btn btn-secondary btn-xs">Back</button>
+          <button type="button" id="btnTourNext" class="btn btn-primary btn-xs">Next</button>
         </div>
       </div>
     </div>
