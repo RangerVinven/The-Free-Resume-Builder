@@ -30,7 +30,13 @@
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
-    formatting: { standardize_skills_gap: true },
+    formatting: {
+      header_content_gap_pt: 6,
+      section_gap_pt: 6,
+      entry_gap_pt: 6,
+      header_gap_overrides: {},
+      auto_bold_stats: false,
+    },
     editorMode: 'manual', // 'manual' | 'ai'
     fullAiChats: [], // [{ id, title, message_count, updated_at }]
     activeFullAiChatId: null,
@@ -126,6 +132,7 @@
     // Preview Pane
     modeLiveHtml: document.getElementById('modeLiveHtml'),
     modeNativePdf: document.getElementById('modeNativePdf'),
+    livePageBadge: document.getElementById('livePageBadge'),
     btnRefreshPdf: document.getElementById('btnRefreshPdf'),
     zoomControls: document.getElementById('zoomControls'),
     btnZoomOut: document.getElementById('btnZoomOut'),
@@ -157,6 +164,12 @@
     confirmDeleteInput: document.getElementById('confirmDeleteInput'),
     btnConfirmDeleteResume: document.getElementById('btnConfirmDeleteResume'),
 
+    modalConfirmAction: document.getElementById('modalConfirmAction'),
+    modalConfirmTitle: document.getElementById('modalConfirmTitle'),
+    modalConfirmMessage: document.getElementById('modalConfirmMessage'),
+    modalConfirmPreview: document.getElementById('modalConfirmPreview'),
+    btnConfirmAction: document.getElementById('btnConfirmAction'),
+
     modalHistory: document.getElementById('modalHistory'),
     historyList: document.getElementById('historyList'),
 
@@ -168,7 +181,13 @@
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
-    settingStandardizeSkillsGap: document.getElementById('settingStandardizeSkillsGap'),
+    settingHeaderContentGap: document.getElementById('settingHeaderContentGap'),
+    settingSectionGap: document.getElementById('settingSectionGap'),
+    settingEntryGap: document.getElementById('settingEntryGap'),
+    headerGapOverridesList: document.getElementById('headerGapOverridesList'),
+    btnAddHeaderOverride: document.getElementById('btnAddHeaderOverride'),
+    headerOverrideSuggestions: document.getElementById('headerOverrideSuggestions'),
+    settingAutoBoldStats: document.getElementById('settingAutoBoldStats'),
 
     modalCreateMode: document.getElementById('modalCreateMode'),
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
@@ -471,6 +490,28 @@
 
   function closeModal(modalEl) {
     modalEl.hidden = true;
+    if (modalEl === el.modalConfirmAction) {
+      pendingConfirmFn = null;
+    }
+  }
+
+  let pendingConfirmFn = null;
+
+  function openConfirmModal({ title, message, previewText = '', confirmLabel = 'Delete', onConfirm }) {
+    el.modalConfirmTitle.textContent = title || 'Are you sure?';
+    el.modalConfirmMessage.textContent = message || 'Are you sure you want to proceed?';
+    const cleanPreview = String(previewText || '').trim();
+    if (cleanPreview) {
+      el.modalConfirmPreview.textContent = cleanPreview.length > 220 ? `${cleanPreview.slice(0, 217)}...` : cleanPreview;
+      el.modalConfirmPreview.hidden = false;
+    } else {
+      el.modalConfirmPreview.textContent = '';
+      el.modalConfirmPreview.hidden = true;
+    }
+    el.btnConfirmAction.textContent = confirmLabel;
+    pendingConfirmFn = onConfirm;
+    openModal(el.modalConfirmAction);
+    el.btnConfirmAction.focus();
   }
 
   function swapItems(arr, i, j) {
@@ -1237,15 +1278,20 @@
         }),
         makeIconButton('pencil', 'Edit section', false, () => openEditSectionModal(idx)),
         makeIconButton('trash-2', 'Delete section', false, () => {
-          if (confirm(`Delete section "${sec.title}" and all of its entries?`)) {
-            sections.splice(idx, 1);
-            if (state.activeSectionIdx >= sections.length) {
-              state.activeSectionIdx = Math.max(0, sections.length - 1);
-            }
-            setDirty(true);
-            renderStage2Outline();
-            renderPreview();
-          }
+          openConfirmModal({
+            title: 'Delete Section?',
+            message: `Are you sure you want to delete "${sec.title}" and all of its entries?`,
+            confirmLabel: 'Delete Section',
+            onConfirm: () => {
+              sections.splice(idx, 1);
+              if (state.activeSectionIdx >= sections.length) {
+                state.activeSectionIdx = Math.max(0, sections.length - 1);
+              }
+              setDirty(true);
+              renderStage2Outline();
+              renderPreview();
+            },
+          });
         }, 'btn-danger-hover')
       );
 
@@ -1449,12 +1495,18 @@
         renderPreview();
       }),
       makeIconButton('trash-2', 'Delete entry', false, () => {
-        if (confirm('Delete this entry?')) {
-          sec.items.splice(itemIdx, 1);
-          setDirty(true);
-          renderActiveSectionCard(sec, state.activeSectionIdx);
-          renderPreview();
-        }
+        const entryLabel = getItemSummaryLabel(item, isSkills, itemIdx);
+        openConfirmModal({
+          title: 'Delete Entry?',
+          message: `Are you sure you want to delete "${entryLabel}"?`,
+          confirmLabel: 'Delete Entry',
+          onConfirm: () => {
+            sec.items.splice(itemIdx, 1);
+            setDirty(true);
+            renderActiveSectionCard(sec, state.activeSectionIdx);
+            renderPreview();
+          },
+        });
       }, 'btn-danger-hover')
     );
 
@@ -1663,13 +1715,22 @@
             renderPreview();
           }),
           makeIconButton('x', 'Delete detail', false, () => {
-            details.splice(dIdx, 1);
-            if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
-              closeAiDrawer();
-            }
-            setDirty(true);
-            renderActiveSectionCard(sec, state.activeSectionIdx);
-            renderPreview();
+            const kindLabel = detail.is_bullet ? 'bullet point' : 'prose block';
+            openConfirmModal({
+              title: detail.is_bullet ? 'Delete Bullet Point?' : 'Delete Prose?',
+              message: `Are you sure you want to delete this ${kindLabel}?`,
+              previewText: detail.text || '',
+              confirmLabel: 'Delete',
+              onConfirm: () => {
+                details.splice(dIdx, 1);
+                if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
+                  closeAiDrawer();
+                }
+                setDirty(true);
+                renderActiveSectionCard(sec, state.activeSectionIdx);
+                renderPreview();
+              },
+            });
           }, 'btn-danger-hover')
         );
 
@@ -1849,11 +1910,111 @@
   // =========================================================
   // LIVE PAPER PREVIEW & NATIVE PDF PREVIEW
   // =========================================================
+  const STAT_BOLD_RE = new RegExp(
+    '(?<![A-Za-z0-9_\\\\/\\x00-])(?:' +
+      '[$£€]\\d+(?:[.,]\\d+)*(?:[KkMmBbTt]\\b|\\+)?|' +
+      '\\d+(?:[.,]\\d+)*%|' +
+      '\\d+(?:[.,]\\d+)*[xX]\\b|' +
+      '\\d+(?:[.,]\\d+)*(?:ms|us|ns|s|KB|MB|GB|TB|PB|Mbps|Gbps|rps|qps|fps)\\b\\+?|' +
+      '\\d+(?:[.,]\\d+)*(?:[KkMmBb]\\+?(?![A-Za-z0-9])|\\+)|' +
+      '\\d{1,3}(?:,\\d{3})+(?:\\+)?|' +
+      '\\d+(?:[.,]\\d+)?(?:-bed|-person|-member|-hour|-day|-week)?(?=\\s+(?:[a-z][A-Za-z-]*\\s+)?(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|weeks?|months?|years?|users?|clients?|customers?|accounts?|patients?|students?|engineers?|developers?|nurses?|staff|baristas?|teams?|apps?|applications?|services?|microservices?|endpoints?|servers?|containers?|orders?|transactions?|requests?|tickets?|records?|CVEs?|bugs?|vulnerabilities|issues?|percent|times|shifts?|beds?)\\b)|' +
+      '\\d+(?:[.,]\\d+)?(?:-(?:bed|person|member|hour|day|week))\\b' +
+    ')',
+    'g'
+  );
+  const BOLD_MD_RE = /\*\*(.+?)\*\*/g;
+  const ESCAPED_TOKEN_RE = /\\(\d+(?:[.,]\d+)?[A-Za-z%+-]*|[$£€]\d+(?:[.,]\d+)*[A-Za-z%+-]*|\*|\\)/g;
+
+  function clampPt(val, fallback = 6) {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.round(Math.max(0, Math.min(24, n)) * 100) / 100;
+  }
+
+  function normalizeFormattingConfig(rawFmt) {
+    const fmt = (rawFmt && typeof rawFmt === 'object') ? rawFmt : {};
+    const headerGap = clampPt(fmt.header_content_gap_pt, 6);
+    const sectionGap = clampPt(fmt.section_gap_pt, 6);
+    const entryGap = clampPt(fmt.entry_gap_pt, 6);
+    const overrides = {};
+    if (fmt.header_gap_overrides && typeof fmt.header_gap_overrides === 'object') {
+      Object.entries(fmt.header_gap_overrides).forEach(([k, v]) => {
+        const title = String(k || '').trim().toUpperCase();
+        if (title) overrides[title] = clampPt(v, headerGap);
+      });
+    } else if (fmt.standardize_skills_gap === false) {
+      overrides.SKILLS = 0;
+      overrides['TECHNICAL SKILLS'] = 0;
+    }
+    return {
+      header_content_gap_pt: headerGap,
+      section_gap_pt: sectionGap,
+      entry_gap_pt: entryGap,
+      header_gap_overrides: overrides,
+      auto_bold_stats: Boolean(fmt.auto_bold_stats),
+    };
+  }
+
+  function parseFormattedSegments(text, autoBoldStats) {
+    if (!text) return [];
+    const placeholders = {};
+    const protectedText = String(text).replace(ESCAPED_TOKEN_RE, (_, inner) => {
+      const idx = Object.keys(placeholders).length;
+      const tag = String(idx).split('').map((d) => String.fromCharCode(65 + Number(d))).join('');
+      const key = `\x00ESC${tag}\x00`;
+      placeholders[key] = inner;
+      return key;
+    });
+    const restore = (s) => {
+      let out = s;
+      Object.entries(placeholders).forEach(([k, v]) => {
+        out = out.split(k).join(v);
+      });
+      return out;
+    };
+
+    const mdMatches = [...protectedText.matchAll(BOLD_MD_RE)];
+    if (mdMatches.length > 0) {
+      const segs = [];
+      let pos = 0;
+      mdMatches.forEach((m) => {
+        if (m.index > pos) segs.push([restore(protectedText.slice(pos, m.index)), false]);
+        segs.push([restore(m[1]), true]);
+        pos = m.index + m[0].length;
+      });
+      if (pos < protectedText.length) segs.push([restore(protectedText.slice(pos)), false]);
+      return segs.filter(([t]) => Boolean(t));
+    }
+
+    if (!autoBoldStats) return [[restore(protectedText), false]];
+
+    const segs = [];
+    let pos = 0;
+    for (const m of protectedText.matchAll(STAT_BOLD_RE)) {
+      if (m.index > pos) segs.push([restore(protectedText.slice(pos, m.index)), false]);
+      segs.push([restore(m[0]), true]);
+      pos = m.index + m[0].length;
+    }
+    if (pos < protectedText.length) segs.push([restore(protectedText.slice(pos)), false]);
+    return segs.filter(([t]) => Boolean(t));
+  }
+
+  function renderFormattedTextHtml(text, autoBoldStats) {
+    return parseFormattedSegments(text, autoBoldStats)
+      .map(([seg, isBold]) => (isBold ? `<strong>${escapeHtml(seg)}</strong>` : escapeHtml(seg)))
+      .join('');
+  }
+
   function renderPreview() {
     if (!state.data) {
       el.resumePaper.innerHTML = '';
       return;
     }
+
+    const fmt = normalizeFormattingConfig(state.formatting);
+    el.resumePaper.style.setProperty('--paper-section-gap', `${fmt.section_gap_pt}pt`);
+    el.resumePaper.style.setProperty('--paper-entry-gap', `${fmt.entry_gap_pt}pt`);
 
     const d = state.data;
     const contactParts = [d.phone, d.email, d.portfolio, d.linkedin]
@@ -1866,13 +2027,16 @@
     `;
 
     (d.sections || []).forEach((sec) => {
-      html += `<div class="paper-section">`;
-      html += `<h2 class="paper-section-title">${escapeHtml((sec.title || '').toUpperCase())}</h2>`;
+      const secTitle = (sec.title || '').trim().toUpperCase();
+      const headerGapPt = Object.prototype.hasOwnProperty.call(fmt.header_gap_overrides, secTitle)
+        ? fmt.header_gap_overrides[secTitle]
+        : fmt.header_content_gap_pt;
+      html += `<div class="paper-section" style="--sec-header-gap: ${headerGapPt}pt;">`;
+      html += `<h2 class="paper-section-title">${escapeHtml(secTitle)}</h2>`;
 
       if (sec.is_skills) {
-        const addFirstGap = state.formatting?.standardize_skills_gap !== false;
         (sec.items || []).forEach((skill, skillIdx) => {
-          const firstClass = skillIdx === 0 && addFirstGap ? ' paper-skill-row-first' : '';
+          const firstClass = skillIdx === 0 ? ' paper-skill-row-first' : '';
           html += `<p class="paper-skill-row${firstClass}"><span class="paper-skill-cat">${escapeHtml(skill.category || '')}:</span> ${escapeHtml(skill.text || '')}</p>`;
         });
       } else {
@@ -1915,18 +2079,19 @@
           const details = item.details || [];
           let inBulletList = false;
           details.forEach((detail) => {
+            const renderedDetail = renderFormattedTextHtml(detail.text || '', fmt.auto_bold_stats);
             if (detail.is_bullet) {
               if (!inBulletList) {
                 html += `<ul class="paper-details-list">`;
                 inBulletList = true;
               }
-              html += `<li class="paper-detail-bullet">${escapeHtml(detail.text || '')}</li>`;
+              html += `<li class="paper-detail-bullet">${renderedDetail}</li>`;
             } else {
               if (inBulletList) {
                 html += `</ul>`;
                 inBulletList = false;
               }
-              html += `<p class="paper-detail-prose">${escapeHtml(detail.text || '')}</p>`;
+              html += `<p class="paper-detail-prose">${renderedDetail}</p>`;
             }
           });
           if (inBulletList) {
@@ -1941,6 +2106,53 @@
     });
 
     el.resumePaper.innerHTML = html;
+    updatePageBreakIndicators();
+  }
+
+  function updatePageBreakIndicators() {
+    if (!el.resumePaper) return;
+    el.resumePaper.querySelectorAll('.paper-page-break').forEach((n) => n.remove());
+
+    // Match Base_Template.docx US Letter dimensions (8.5 x 11 in, margins top 0.39in, bottom 0.30in)
+    const PX_PER_IN = 96;
+    const PAGE_HEIGHT_IN = 11;
+    const TOP_MARGIN_IN = 0.39;
+    const BOTTOM_MARGIN_IN = 0.30;
+    const PAGE_1_LIMIT_PX = (PAGE_HEIGHT_IN - BOTTOM_MARGIN_IN) * PX_PER_IN; // 1027.2px
+    const PRINTABLE_PX = (PAGE_HEIGHT_IN - TOP_MARGIN_IN - BOTTOM_MARGIN_IN) * PX_PER_IN; // 989.76px
+
+    const children = Array.from(el.resumePaper.children);
+    let contentBottom = 0;
+    if (children.length > 0) {
+      const lastEl = children[children.length - 1];
+      contentBottom = lastEl.offsetTop + lastEl.offsetHeight;
+    }
+
+    let pageCount = 1;
+    if (contentBottom > PAGE_1_LIMIT_PX + 2) {
+      pageCount = 1 + Math.ceil((contentBottom - PAGE_1_LIMIT_PX) / PRINTABLE_PX);
+    }
+    el.resumePaper.style.minHeight = `${pageCount * PAGE_HEIGHT_IN}in`;
+
+    for (let p = 1; p < pageCount; p += 1) {
+      const topPx = PAGE_1_LIMIT_PX + (p - 1) * PRINTABLE_PX;
+      const marker = document.createElement('div');
+      marker.className = 'paper-page-break';
+      marker.style.top = `${topPx}px`;
+      marker.innerHTML = `<span class="paper-page-break-label">Page ${p} / Page ${p + 1} Break</span>`;
+      el.resumePaper.appendChild(marker);
+    }
+
+    if (el.livePageBadge) {
+      el.livePageBadge.classList.remove('is-ok', 'is-overflow');
+      if (pageCount === 1) {
+        el.livePageBadge.textContent = '1 Page';
+        el.livePageBadge.classList.add('is-ok');
+      } else {
+        el.livePageBadge.textContent = `~${pageCount} Pages (Overflow)`;
+        el.livePageBadge.classList.add('is-overflow');
+      }
+    }
   }
 
   function setPreviewMode(mode) {
@@ -1952,8 +2164,13 @@
     el.pdfPreviewWrapper.hidden = isLive;
     el.btnRefreshPdf.hidden = isLive;
     el.zoomControls.hidden = !isLive;
+    if (el.livePageBadge) {
+      el.livePageBadge.hidden = !isLive;
+    }
     if (!isLive) {
       refreshNativePdfPreview();
+    } else {
+      updatePageBreakIndicators();
     }
   }
 
@@ -2075,9 +2292,10 @@
         model: (ai.model || '').trim() || defaultModel,
         hasActiveKey: Boolean((keys[provider] || '').trim()),
       };
-      state.formatting = {
-        standardize_skills_gap: fmt.standardize_skills_gap !== false,
-      };
+      state.formatting = normalizeFormattingConfig(fmt);
+      if (state.view === 'wizard' && state.data) {
+        renderPreview();
+      }
     } catch {
       // Leave existing config on transient failure
     }
@@ -2761,12 +2979,96 @@
     el.fullAiInput.focus();
   }
 
+  function refreshHeaderOverrideDatalist() {
+    if (!el.headerOverrideSuggestions) return;
+    const baseTitles = [
+      'PROFESSIONAL SUMMARY',
+      'EXPERIENCE',
+      'EDUCATION',
+      'PROJECTS',
+      'SKILLS',
+      'TECHNICAL SKILLS',
+    ];
+    const activeTitles = (state.data?.sections || [])
+      .map((s) => (s.title || '').trim().toUpperCase())
+      .filter(Boolean);
+    const merged = Array.from(new Set([...activeTitles, ...baseTitles]));
+    el.headerOverrideSuggestions.innerHTML = merged
+      .map((t) => `<option value="${escapeHtml(t)}"></option>`)
+      .join('');
+  }
+
+  function renderHeaderOverridesList(overridesObj) {
+    el.headerGapOverridesList.innerHTML = '';
+    const entries = Object.entries(overridesObj || {});
+    if (entries.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'override-empty';
+      empty.textContent = 'No per-header overrides set (all headers use the default gap above).';
+      el.headerGapOverridesList.appendChild(empty);
+      return;
+    }
+    entries.forEach(([title, gapVal]) => {
+      el.headerGapOverridesList.appendChild(createHeaderOverrideRow(title, gapVal));
+    });
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function createHeaderOverrideRow(title = '', gapPt = 6) {
+    const row = document.createElement('div');
+    row.className = 'override-row';
+
+    const titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.className = 'input-control override-title-input';
+    titleInput.setAttribute('list', 'headerOverrideSuggestions');
+    titleInput.placeholder = 'Header name (e.g. SKILLS)';
+    titleInput.value = title;
+
+    const gapWrap = document.createElement('div');
+    gapWrap.className = 'override-gap-unit';
+
+    const gapInput = document.createElement('input');
+    gapInput.type = 'number';
+    gapInput.className = 'input-control override-gap-input';
+    gapInput.min = '0';
+    gapInput.max = '24';
+    gapInput.step = '0.5';
+    gapInput.value = String(clampPt(gapPt, 6));
+
+    const unit = document.createElement('span');
+    unit.textContent = 'pt';
+    gapWrap.append(gapInput, unit);
+
+    const removeBtn = makeIconButton('x', 'Remove override', false, () => {
+      row.remove();
+      if (el.headerGapOverridesList.querySelectorAll('.override-row').length === 0) {
+        renderHeaderOverridesList({});
+      }
+    }, 'btn-danger-hover');
+
+    row.append(titleInput, gapWrap, removeBtn);
+    return row;
+  }
+
+  function collectHeaderOverrides() {
+    const result = {};
+    el.headerGapOverridesList.querySelectorAll('.override-row').forEach((row) => {
+      const title = (row.querySelector('.override-title-input')?.value || '').trim().toUpperCase();
+      const gap = row.querySelector('.override-gap-input')?.value;
+      if (title) {
+        result[title] = clampPt(gap, 6);
+      }
+    });
+    return result;
+  }
+
   async function openSettingsModal() {
     try {
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
-      const fmt = settings.formatting || {};
+      const fmt = normalizeFormattingConfig(settings.formatting);
       el.aiProviderSelect.value = ai.provider || 'OpenAI';
       el.aiModelInput.value = ai.model || (PROVIDER_DEFAULTS[el.aiProviderSelect.value]?.model || 'gpt-4o-mini');
       syncSettingsProviderFields(false);
@@ -2774,7 +3076,12 @@
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
       el.keyOther.value = keys.Other || '';
-      el.settingStandardizeSkillsGap.checked = fmt.standardize_skills_gap !== false;
+      el.settingHeaderContentGap.value = String(fmt.header_content_gap_pt);
+      el.settingSectionGap.value = String(fmt.section_gap_pt);
+      el.settingEntryGap.value = String(fmt.entry_gap_pt);
+      el.settingAutoBoldStats.checked = Boolean(fmt.auto_bold_stats);
+      refreshHeaderOverrideDatalist();
+      renderHeaderOverridesList(fmt.header_gap_overrides);
       openModal(el.modalSettings);
     } catch (err) {
       showToast(err.message, 'error');
@@ -2924,8 +3231,22 @@
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalConfirmAction, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
       }
+    });
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => {
+        if (state.view === 'wizard' && state.previewMode === 'live' && state.data) {
+          updatePageBreakIndicators();
+        }
+      });
+    }
+
+    el.btnConfirmAction.addEventListener('click', () => {
+      const fn = pendingConfirmFn;
+      closeModal(el.modalConfirmAction);
+      if (typeof fn === 'function') fn();
     });
 
     // Modal close buttons
@@ -2983,11 +3304,25 @@
 
     // Settings Modal
     el.aiProviderSelect.addEventListener('change', () => syncSettingsProviderFields(true));
+    el.btnAddHeaderOverride.addEventListener('click', () => {
+      const emptyMsg = el.headerGapOverridesList.querySelector('.override-empty');
+      if (emptyMsg) emptyMsg.remove();
+      const row = createHeaderOverrideRow('', clampPt(el.settingHeaderContentGap.value, 6));
+      el.headerGapOverridesList.appendChild(row);
+      if (window.lucide) lucide.createIcons();
+      row.querySelector('.override-title-input')?.focus();
+    });
     el.formSettings.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        const standardizeSkillsGap = Boolean(el.settingStandardizeSkillsGap.checked);
-        await fetchJson('/api/settings', {
+        const formattingPayload = {
+          header_content_gap_pt: clampPt(el.settingHeaderContentGap.value, 6),
+          section_gap_pt: clampPt(el.settingSectionGap.value, 6),
+          entry_gap_pt: clampPt(el.settingEntryGap.value, 6),
+          header_gap_overrides: collectHeaderOverrides(),
+          auto_bold_stats: Boolean(el.settingAutoBoldStats.checked),
+        };
+        const { settings } = await fetchJson('/api/settings', {
           method: 'PUT',
           body: JSON.stringify({
             ai: {
@@ -3000,16 +3335,14 @@
               Claude: el.keyClaude.value,
               Other: el.keyOther.value,
             },
-            formatting: {
-              standardize_skills_gap: standardizeSkillsGap,
-            },
+            formatting: formattingPayload,
           }),
         });
-        state.formatting = { standardize_skills_gap: standardizeSkillsGap };
+        state.formatting = normalizeFormattingConfig(settings?.formatting || formattingPayload);
         closeModal(el.modalSettings);
         showToast('Settings saved.', 'success');
         if (state.view === 'wizard' && state.data) {
-          renderLivePreview();
+          renderPreview();
           if (state.previewMode === 'pdf') {
             refreshNativePdfPreview();
           }

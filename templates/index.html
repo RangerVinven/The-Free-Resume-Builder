@@ -513,6 +513,7 @@
             </div>
 
             <div class="preview-controls">
+              <span id="livePageBadge" class="page-count-badge" title="Estimated US Letter page count (8.5&quot; &times; 11&quot;). Use PDF Render for exact LibreOffice pagination.">1 Page</span>
               <button id="btnRefreshPdf" class="btn btn-secondary btn-xs" hidden>
                 <i data-lucide="refresh-cw"></i>
                 <span>Refresh PDF</span>
@@ -658,6 +659,26 @@
     </div>
   </div>
 
+  <!-- Modal: Confirm Deletion / Action -->
+  <div id="modalConfirmAction" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalConfirmTitle">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 id="modalConfirmTitle">Are you sure?</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalConfirmAction" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="modalConfirmMessage" class="modal-description"></p>
+        <blockquote id="modalConfirmPreview" class="confirm-preview-quote" hidden></blockquote>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalConfirmAction">Cancel</button>
+        <button type="button" id="btnConfirmAction" class="btn btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Version History -->
   <div id="modalHistory" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalHistoryTitle">
     <div class="modal-dialog modal-lg">
@@ -679,7 +700,7 @@
 
   <!-- Modal: Settings / API Keys -->
   <div id="modalSettings" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalSettingsTitle">
-    <div class="modal-dialog modal-sm">
+    <div class="modal-dialog modal-md">
       <div class="modal-header">
         <h3 id="modalSettingsTitle">Application Settings</h3>
         <button class="btn btn-ghost btn-xs modal-close" data-close="modalSettings" aria-label="Close">
@@ -688,7 +709,7 @@
       </div>
       <form id="formSettings">
         <div class="modal-body modal-scroll">
-          <p class="modal-description">Configure your active model and API keys stored locally on this machine.</p>
+          <p class="modal-description">Configure your active AI model, API keys, resume spacing, and statistic formatting.</p>
           <div class="form-stack">
             <div class="form-grid-2">
               <div class="form-field">
@@ -737,13 +758,51 @@
               <label for="keyOther">Other API Key <span class="label-optional">(optional)</span></label>
               <input id="keyOther" type="password" class="input-control" placeholder="Custom key..." autocomplete="off" />
             </div>
+
             <div class="settings-divider"></div>
+            <div class="settings-section-heading">Resume Spacing &amp; Gaps (pt)</div>
+            <div class="form-grid-3">
+              <div class="form-field">
+                <label for="settingHeaderContentGap">Under Headers (pt)</label>
+                <input id="settingHeaderContentGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+              </div>
+              <div class="form-field">
+                <label for="settingSectionGap">Between Sections (pt)</label>
+                <input id="settingSectionGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+              </div>
+              <div class="form-field">
+                <label for="settingEntryGap">Between Entries (pt)</label>
+                <input id="settingEntryGap" type="number" class="input-control" min="0" max="24" step="0.5" value="6" />
+              </div>
+            </div>
+            <p class="field-hint">All section headers (including Professional Summary, Experience, and Skills) share the Under Headers gap by default.</p>
+
             <div class="form-field">
-              <label class="form-toggle-row" for="settingStandardizeSkillsGap">
-                <input id="settingStandardizeSkillsGap" type="checkbox" checked />
+              <div class="override-header-row">
+                <label>Per-Header Gap Overrides <span class="label-optional">(optional)</span></label>
+                <button type="button" id="btnAddHeaderOverride" class="btn btn-secondary btn-xs">
+                  <i data-lucide="plus"></i><span>Add Override</span>
+                </button>
+              </div>
+              <datalist id="headerOverrideSuggestions">
+                <option value="PROFESSIONAL SUMMARY"></option>
+                <option value="EXPERIENCE"></option>
+                <option value="EDUCATION"></option>
+                <option value="PROJECTS"></option>
+                <option value="SKILLS"></option>
+                <option value="TECHNICAL SKILLS"></option>
+              </datalist>
+              <div id="headerGapOverridesList" class="override-list"></div>
+            </div>
+
+            <div class="settings-divider"></div>
+            <div class="settings-section-heading">Typography &amp; Statistics</div>
+            <div class="form-field">
+              <label class="form-toggle-row" for="settingAutoBoldStats">
+                <input id="settingAutoBoldStats" type="checkbox" />
                 <span>
-                  <span class="form-toggle-title">Standardize spacing under Skills header</span>
-                  <span class="form-toggle-hint">Add the same 6pt gap below key-value headers (like Skills) as standard experience and project sections.</span>
+                  <span class="form-toggle-title">Auto-bold statistics &amp; metrics</span>
+                  <span class="form-toggle-hint">Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; versions). Wrap any phrase in <code>**bold**</code> to take manual bolding control on that bullet, or prefix a number with <code>\</code> (e.g. <code>\24-bed</code>) to ignore it.</span>
                 </span>
               </label>
             </div>

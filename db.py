@@ -57,6 +57,7 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
             if not title:
                 continue
             is_skills = bool(sec.get("is_skills", False))
+            is_summary_title = any(kw in title for kw in ("SUMMARY", "PROFILE", "OBJECTIVE"))
             raw_items = sec.get("items") if isinstance(sec.get("items"), list) else []
             clean_items = []
             if is_skills:
@@ -69,20 +70,55 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                         clean_items.append({"category": cat, "text": txt})
             else:
                 for it in raw_items:
-                    if not isinstance(it, dict):
+                    if isinstance(it, str) or not isinstance(it, dict):
+                        txt = _clean_str(it)
+                        if txt:
+                            starts_with_bullet = bool(re.match(r"^[\u2022\u25e6\u2023\u25aa\u25cf\*\-]\s*", txt))
+                            clean_text = re.sub(r"^[\u2022\u25e6\u2023\u25aa\u25cf\*\-]\s*", "", txt)
+                            is_bullet = starts_with_bullet if starts_with_bullet else not is_summary_title
+                            clean_items.append({
+                                "role": "",
+                                "company": "",
+                                "location": "",
+                                "date": "",
+                                "subtitle": "",
+                                "subtitle_right": "",
+                                "details": [{"is_bullet": is_bullet, "text": clean_text}],
+                            })
                         continue
+
                     raw_details = it.get("details") if isinstance(it.get("details"), list) else []
                     clean_details = []
                     for d in raw_details:
                         if isinstance(d, dict):
                             d_txt = _clean_str(d.get("text"))
                             if d_txt:
+                                d_is_bullet = d.get("is_bullet")
+                                if d_is_bullet is None:
+                                    d_is_bullet = not is_summary_title
+                                else:
+                                    d_is_bullet = bool(d_is_bullet)
                                 clean_details.append({
-                                    "is_bullet": bool(d.get("is_bullet", True)),
+                                    "is_bullet": d_is_bullet,
                                     "text": d_txt,
                                 })
                         elif isinstance(d, str) and d.strip():
-                            clean_details.append({"is_bullet": True, "text": d.strip()})
+                            clean_details.append({
+                                "is_bullet": not is_summary_title,
+                                "text": d.strip(),
+                            })
+
+                    if not clean_details:
+                        fallback_text = _clean_str(
+                            it.get("text")
+                            or it.get("summary")
+                            or it.get("content")
+                            or it.get("description")
+                            or it.get("prose")
+                        )
+                        if fallback_text:
+                            is_b = bool(it.get("is_bullet", not is_summary_title))
+                            clean_details.append({"is_bullet": is_b, "text": fallback_text})
 
                     item_obj = {
                         "role": _clean_str(it.get("role")),
@@ -93,6 +129,19 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                         "subtitle_right": _clean_str(it.get("subtitle_right")),
                         "details": clean_details,
                     }
+
+                    if is_summary_title and item_obj["role"]:
+                        role_norm = item_obj["role"].strip().upper()
+                        if role_norm in (
+                            "PROFESSIONAL SUMMARY",
+                            "SUMMARY",
+                            "PROFILE",
+                            "CAREER OBJECTIVE",
+                            "OBJECTIVE",
+                            title,
+                        ):
+                            item_obj["role"] = ""
+
                     has_header = any(
                         item_obj[k]
                         for k in ("role", "company", "location", "date", "subtitle", "subtitle_right")
@@ -100,10 +149,64 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                     if has_header or clean_details:
                         clean_items.append(item_obj)
 
+                if not clean_items:
+                    sec_fallback = _clean_str(
+                        sec.get("summary")
+                        or sec.get("text")
+                        or sec.get("content")
+                        or sec.get("description")
+                        or sec.get("prose")
+                    )
+                    if sec_fallback:
+                        clean_items.append({
+                            "role": "",
+                            "company": "",
+                            "location": "",
+                            "date": "",
+                            "subtitle": "",
+                            "subtitle_right": "",
+                            "details": [{"is_bullet": False, "text": sec_fallback}],
+                        })
+
             normalized["sections"].append({
                 "title": title,
                 "is_skills": is_skills,
                 "items": clean_items,
+            })
+
+    top_summary = _clean_str(
+        src.get("summary") or src.get("professional_summary") or src.get("profile")
+    )
+    if top_summary:
+        summary_sec = None
+        for s in normalized["sections"]:
+            if any(kw in s["title"] for kw in ("SUMMARY", "PROFILE", "OBJECTIVE")):
+                summary_sec = s
+                break
+        if summary_sec is not None:
+            if not summary_sec["items"]:
+                summary_sec["items"].append({
+                    "role": "",
+                    "company": "",
+                    "location": "",
+                    "date": "",
+                    "subtitle": "",
+                    "subtitle_right": "",
+                    "details": [{"is_bullet": False, "text": top_summary}],
+                })
+        else:
+            normalized["sections"].insert(0, {
+                "title": "PROFESSIONAL SUMMARY",
+                "is_skills": False,
+                "items": [{
+                    "role": "",
+                    "company": "",
+                    "location": "",
+                    "date": "",
+                    "subtitle": "",
+                    "subtitle_right": "",
+                    "details": [{"is_bullet": False, "text": top_summary}],
+                }],
             })
 
     if isinstance(existing_data, dict) and "_history" in existing_data:

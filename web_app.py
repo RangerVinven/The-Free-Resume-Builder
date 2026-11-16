@@ -9,7 +9,6 @@ import urllib.request
 from io import BytesIO
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
-from docxtpl import DocxTemplate
 
 from db import (
     _clean_str,
@@ -32,8 +31,9 @@ from db import (
 )
 from resume_builder import (
     TEMPLATE_PATH,
-    build_render_context,
     load_settings,
+    normalize_formatting_settings,
+    render_resume_docx,
     save_settings,
 )
 from convert_to_pdf import convert_docx_to_pdf
@@ -62,9 +62,7 @@ def _render_resume_bytes(data: dict, stem: str, fmt: str) -> BytesIO | None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_docx = Path(tmpdir) / f"{stem}_generated.docx"
-        doc = DocxTemplate(TEMPLATE_PATH)
-        doc.render(build_render_context(data), autoescape=True)
-        doc.save(tmp_docx)
+        render_resume_docx(data, tmp_docx)
 
         if fmt == "docx":
             return BytesIO(tmp_docx.read_bytes())
@@ -373,10 +371,7 @@ def get_settings_api():
         "provider": ai_cfg.get("provider", "OpenAI"),
         "model": ai_cfg.get("model", "gpt-4o-mini"),
     })
-    fmt_cfg = settings.get("formatting", {})
-    settings["formatting"] = {
-        "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
-    }
+    settings["formatting"] = normalize_formatting_settings(settings.get("formatting"))
     return jsonify({"settings": settings})
 
 
@@ -396,37 +391,45 @@ def update_settings_api():
         }
     fmt_cfg = payload.get("formatting")
     if isinstance(fmt_cfg, dict):
-        settings["formatting"] = {
-            "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
-        }
+        settings["formatting"] = normalize_formatting_settings(fmt_cfg)
+    else:
+        settings["formatting"] = normalize_formatting_settings(settings.get("formatting"))
     save_settings(settings)
     return jsonify({"settings": settings})
 
 
 SHARED_BULLET_GUIDE = (
-    "Bullet Point Writing Standards (Modified Google XYZ + Action-Impact):\n"
-    "- Formula: Lead with a strong action verb, state the quantified result or concrete outcome (X/Y), "
-    "and specify the technical method, system, or scope (Z): '[Verb] + [Accomplished X / Metric Y] + [by doing Z]'.\n"
-    "- Length: Aim for 1 crisp line on US Letter (roughly 80-125 characters). Never exceed 2 lines "
-    "(~190 characters max). Cut filler such as 'Responsible for', 'Helped to', 'Assisted with', or 'Successfully'.\n"
-    "- Statistics & Numbers: Highlight concrete numbers (%, $, latency, throughput, hours saved, team size, users) "
-    "whenever the user supplies them. NEVER invent or guess numbers. If the user's description lacks metrics or scope, "
-    "ask 1-3 quick questions in 'reply' to uncover real numbers before locking in final bullets.\n"
-    "- Tense & Punctuation: Past tense for previous roles; present tense for ongoing/current roles. "
+    "Universal Bullet Point Writing Standards (Google XYZ + Action-Impact, All Industries):\n"
+    "- Formula: Lead with a strong past/present action verb, state the concrete outcome or quantified result (X/Y), "
+    "and specify the method, tool, system, or scope (Z): '[Strong Verb] + [Accomplished X / Metric Y] + [via/by Z]'.\n"
+    "- Length Discipline (Critical): Target 85-125 characters (1 crisp line on US Letter). NEVER exceed 175 characters. "
+    "Cut filler words ('Responsible for', 'Helped to', 'Assisted with', 'Worked on', 'Successfully', unnecessary articles like 'the'/'a', 'every single week' -> 'weekly').\n"
+    "- Action Verb Upgrading: NEVER blindly mirror casual or passive user verbs ('worked on', 'made', 'did', 'rewrote', 'helped', 'handled', 'used'). "
+    "Pick an accurate, authoritative verb matched to the industry and task:\n"
+    "  * Creation & Architecture: Architected, Engineered, Designed, Built, Launched, Authored, Established\n"
+    "  * Optimization & Transformation: Re-engineered, Overhauled, Streamlined, Optimized, Accelerated, Modernized, Consolidated\n"
+    "  * Leadership & Instruction: Led, Directed, Mentored, Coordinated, Trained, Facilitated, Spearheaded\n"
+    "  * Protection, Automation & Cost/Risk Control: Automated, Hardened, Eliminated, Mitigated, Secured, Resolved, Audited\n"
+    "  * Growth & Delivery: Increased, Generated, Expanded, Delivered, Secured, Exceeded, Saved\n"
+    "- Facts, Metrics & Scope: Preserve ALL concrete numbers, baselines (e.g. '1.2s to 450ms'), tools, and scale the user gave. "
+    "Highlight relevant metrics for the user's field (%, $, hours saved, revenue, patients/clients served, error/defect reduction, SLA, latency, pass rates). "
+    "NEVER invent, estimate, or insert placeholder numbers (such as '10+', '20%', '30%', '100+') when the user did not supply them, and prefer exact stated figures (e.g. 'from 18% to 29%') over unrequested derived percentages.\n"
+    "- Tense & Punctuation: Past tense for previous roles; present tense for current/ongoing roles. "
     "Do NOT include leading bullet characters ('•', '-', '*').\n\n"
-    "Reference Examples (notice 1-line punchiness, XYZ ordering, and clear metrics):\n"
-    "1. Weak: 'Helped make our backend API faster using Redis and Postgres queries.'\n"
-    "   Strong: 'Reduced API p95 latency by 42% (310ms to 180ms) for 120K daily users by adding Redis caching and SQL indexing.'\n"
-    "2. Weak: 'Built automation scripts for the finance team spreadsheet work.'\n"
-    "   Strong: 'Automated nightly billing reconciliation in Python and PostgreSQL, saving 12 hours of manual audits weekly.'\n"
-    "3. Weak: 'Managed Kubernetes migration project with a group of developers.'\n"
-    "   Strong: 'Led 4 engineers to migrate 18 legacy microservices to Kubernetes ahead of schedule with zero downtime.'\n"
-    "4. Weak: 'Did customer support onboarding and improved satisfaction.'\n"
-    "   Strong: 'Cut enterprise onboarding time from 14 days to 5 days by redesigning kickoff playbooks across 60+ accounts.'\n"
-    "5. Weak: 'Created an ML model for detecting fraud in transactions.'\n"
-    "   Strong: 'Built an XGBoost fraud classifier on 2.4M transactions, raising recall by 19% while keeping false positives under 1%.'\n"
-    "6. When user confirms no numeric metric is available (focus on concrete scope & outcome):\n"
-    "   Strong: 'Designed a centralized React component library adopted across 5 internal product teams to unify UI accessibility.'"
+    "Cross-Domain Reference Examples (notice 85-125 char 1-line punchiness and strong verbs):\n"
+    "1. Engineering — Weak: 'Helped make our backend API faster using Redis and Postgres.'\n"
+    "   Strong (105 chars): 'Reduced API p95 latency by 42% (310ms to 180ms) for 120K daily users via Redis caching and SQL indexing.'\n"
+    "2. Marketing — Weak: 'Ran social media ads and improved our lead numbers.'\n"
+    "   Strong (110 chars): 'Grew qualified inbound leads by 38% while lowering CAC 22% across $150K in targeted Meta and LinkedIn campaigns.'\n"
+    "3. Healthcare — Weak: 'Helped check in patients faster and fixed scheduling errors.'\n"
+    "   Strong (108 chars): 'Streamlined clinical intake across 45+ daily patients, cutting wait times 30% and eliminating charting errors.'\n"
+    "4. Finance / Ops — Weak: 'Built automation scripts for the finance team spreadsheet work.'\n"
+    "   Strong (98 chars): 'Automated nightly billing reconciliation in Python and SQL, saving 12 hours of manual audits weekly.'\n"
+    "5. Education / Leadership — Weak: 'Taught coding workshops and helped students pass.'\n"
+    "   Strong (105 chars): 'Mentored 60+ undergraduate students in Python algorithms, lifting cohort exam pass rates from 74% to 92%.'\n"
+    "6. When user gives NO numbers (focus strictly on factual scope, tools, and qualitative outcome):\n"
+    "   BAD (fabricated '30%' & '10+'): 'Improved build stability by 30% across 10+ pull requests.'\n"
+    "   GOOD (103 chars, zero fake stats): 'Standardized Python unit testing and PR validation checks to catch regressions before production builds.'"
 )
 
 
@@ -467,32 +470,32 @@ def build_bullet_system_prompt(context: dict) -> str:
         if is_bullet
         else (
             "Prose Writing Standards:\n"
-            "- Write a tight 1-2 line prose statement grounded strictly in facts provided by the user.\n"
-            "- Prioritize measurable outcomes or concrete scope; do NOT include leading bullet symbols ('•', '-', '*').\n\n"
+            "- Write a tight 1-3 line prose statement grounded strictly in facts provided by the user.\n"
+            "- Prioritize measurable outcomes, domain expertise, or concrete scope; do NOT include leading bullet symbols ('•', '-', '*').\n\n"
         )
     )
 
     return (
-        "You are a precise, practical resume writing coach helping the user craft a single "
+        "You are an expert, domain-adaptable resume writing coach helping the user craft a single "
         f"{style_label} for their resume.\n\n"
         f"Resume Entry Context:\n{ctx_block}\n\n"
         f"{style_section}"
         "Interaction Guidelines:\n"
-        "1. Never invent metrics, technologies, responsibilities, or achievements the user has not stated.\n"
-        "2. If the user has not yet described what they did—or if asking for numbers/scale (e.g., %, $, time saved, "
-        "user volume) would turn a generic line into an XYZ bullet—ask 1 to 3 concise, specific questions.\n"
-        "3. When you have enough information (or when the user asks for examples or rewrites), provide 2 to 3 "
-        "distinct, crisp options (e.g., 'Impact-Focused (1-line)', 'Technical', 'Concise').\n"
-        "4. Avoid generic fluff and exaggerated buzzwords.\n\n"
+        "1. STRICT FACTUALITY: Never invent or guess any numbers, percentages, user counts, durations, tools, or achievements the user did not explicitly state. If the user gave no numbers, your drafts MUST contain zero numbers.\n"
+        "2. ALWAYS draft 2 distinct suggestions whenever the user has provided ANY work description, task, or Current Draft Text—even if numbers are missing:\n"
+        "   - 'Action-Focused' (or 'Impact-Focused' when user provided metrics): Retain ALL concrete facts, baselines, tools, and scale the user provided (under 175 chars).\n"
+        "   - 'Concise (1-Line)': Strictly 80-120 characters (must be shorter than the first option) while keeping the strongest stated fact/outcome.\n"
+        "3. If adding real numbers/scale (e.g., %, $, volume, time saved, team size) would strengthen the drafts, ask 1-2 short, domain-relevant follow-up questions in 'reply' alongside your factual drafts.\n"
+        "4. ONLY return an empty array [] for 'suggestions' if the user has not described any work or task yet (e.g., asking how to start from a blank box).\n"
+        "5. Avoid hollow corporate clichés (e.g. 'synergized', 'thought leader', 'dynamic self-starter').\n\n"
         "You MUST respond strictly with a JSON object matching this schema:\n"
         "{\n"
-        '  "reply": "Short conversational message or 1-3 clear clarifying questions.",\n'
+        '  "reply": "Brief feedback plus 1-2 optional follow-up questions if metrics are missing.",\n'
         '  "suggestions": [\n'
-        '    {"label": "Impact-Focused", "text": "..."},\n'
-        '    {"label": "Concise", "text": "..."}\n'
+        '    {"label": "Action-Focused", "text": "..."},\n'
+        '    {"label": "Concise (1-Line)", "text": "..."}\n'
         "  ]\n"
-        "}\n"
-        "Use an empty array [] for \"suggestions\" when you are only asking clarifying questions before drafting."
+        "}"
     )
 
 
@@ -503,54 +506,66 @@ def build_full_resume_system_prompt(resume_data: dict) -> str:
     snapshot_json = json.dumps(snapshot, indent=2)
 
     return (
-        "You are an expert, practical resume architect collaborating step-by-step with the user to build "
-        "or refine their complete resume.\n\n"
+        "You are an expert, domain-adaptable resume architect collaborating step-by-step with the user to build "
+        "or refine their complete resume across any profession or industry.\n\n"
         f"Current Resume JSON State:\n```json\n{snapshot_json}\n```\n\n"
-        "Exact Target Schema for `updated_resume`:\n"
+        "Target Schema Structure for `updated_resume` (ONLY include sections the user provided or that already exist in Current Resume JSON State):\n"
         "{\n"
-        '  "name": "Full Name",\n'
-        '  "phone": "...",\n'
-        '  "email": "...",\n'
-        '  "portfolio": "...",\n'
-        '  "linkedin": "...",\n'
+        '  "name": "<Full Name>",\n'
+        '  "phone": "<Phone>",\n'
+        '  "email": "<Email>",\n'
+        '  "portfolio": "<Portfolio URL>",\n'
+        '  "linkedin": "<LinkedIn URL>",\n'
         '  "sections": [\n'
         "    {\n"
-        '      "title": "UPPERCASE SECTION TITLE (e.g. EXPERIENCE, EDUCATION, PROJECTS, SKILLS)",\n'
+        '      "title": "<UPPERCASE SECTION TITLE, e.g. PROFESSIONAL SUMMARY>",\n'
         '      "is_skills": false,\n'
         '      "items": [\n'
         "        {\n"
-        '          "role": "Primary Role, Degree, or Project Name",\n'
-        '          "company": "Organization / University",\n'
-        '          "location": "City, State",\n'
-        '          "date": "May 2023 - Present",\n'
-        '          "subtitle": "Optional secondary left metadata (e.g., Coursework, GPA)",\n'
-        '          "subtitle_right": "Optional secondary right metadata",\n'
-        '          "details": [\n'
-        '            {"is_bullet": true, "text": "Clean bullet text without leading symbol"}\n'
-        "          ]\n"
+        '          "role": "",\n'
+        '          "company": "",\n'
+        '          "location": "",\n'
+        '          "date": "",\n'
+        '          "subtitle": "",\n'
+        '          "subtitle_right": "",\n'
+        '          "details": [{"is_bullet": false, "text": "<Prose summary paragraph>"}]\n'
         "        }\n"
         "      ]\n"
         "    },\n"
         "    {\n"
-        '      "title": "TECHNICAL SKILLS",\n'
-        '      "is_skills": true,\n'
+        '      "title": "<UPPERCASE SECTION TITLE, e.g. EXPERIENCE, EDUCATION, PROJECTS>",\n'
+        '      "is_skills": false,\n'
         '      "items": [\n'
-        '        {"category": "Languages", "text": "Python, TypeScript, SQL"}\n'
+        "        {\n"
+        '          "role": "<Role, Degree, or Project Name>",\n'
+        '          "company": "<Organization / University>",\n'
+        '          "location": "<City, State>",\n'
+        '          "date": "<Date Range>",\n'
+        '          "subtitle": "<Optional left metadata, e.g. Degree/GPA>",\n'
+        '          "subtitle_right": "<Optional right metadata>",\n'
+        '          "details": [{"is_bullet": true, "text": "<Crisp XYZ bullet under 175 chars, target 85-125 chars>"}]\n'
+        "        }\n"
         "      ]\n"
+        "    },\n"
+        "    {\n"
+        '      "title": "<UPPERCASE KEY-VALUE SECTION, e.g. TECHNICAL SKILLS, CERTIFICATIONS>",\n'
+        '      "is_skills": true,\n'
+        '      "items": [{"category": "<Category>", "text": "<Comma-separated items>"}]\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
         f"{SHARED_BULLET_GUIDE}\n\n"
         "Guidelines:\n"
-        "1. Never fabricate employers, degrees, dates, projects, technologies, or metrics the user has not provided.\n"
-        "2. Whenever the user shares facts (name, contact info, education, roles, projects, bullet ideas, or skills), "
-        "incorporate them into `updated_resume` right away—formatting bullet points to match the Bullet Point Writing Standards above—"
+        "1. CRITICAL — No Fabricated or Placeholder Sections: Never fabricate employers, degrees, dates, metrics, or skills, and NEVER copy placeholder sections or example text from the schema above when the user has not mentioned them.\n"
+        "2. Immediate Integration: Whenever the user shares real facts (contact info, summary, education, roles, projects, bullet ideas, or skills), "
+        "incorporate them into `updated_resume` right away—following the Universal Bullet Point Writing Standards above (strong upgraded verbs, <= 175 chars, target 85-125 chars)—"
         "while preserving ALL existing resume data they did not ask to remove.\n"
-        "3. Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for standard entries.\n"
-        "4. Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
-        "5. If user descriptions lack numbers or measurable outcomes, still draft clean initial bullets from known facts AND "
-        "ask 2 to 4 focused questions in `reply` (asking for stats/metrics/scale or missing resume sections next).\n"
-        "6. You MUST respond strictly with a JSON object matching:\n"
+        "3. Summary / Profile Sections: For summary, profile, or objective sections (e.g., 'PROFESSIONAL SUMMARY'), set `is_skills: false`, leave `role`, `company`, `location`, `date`, and subtitles as empty strings `\"\"`, and place the prose text in `details`: `[{\"is_bullet\": false, \"text\": \"...\"}]`. Do NOT place raw strings directly into `items`.\n"
+        "4. Key-Value Sections: Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for all other sections.\n"
+        "5. Formatting: Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
+        "6. Coaching: If user descriptions lack numbers or measurable outcomes, still draft clean initial bullets from known facts AND "
+        "ask 2 to 3 focused questions in `reply` (asking for real stats/metrics/scale or missing resume sections next).\n"
+        "7. Output Format: Respond strictly with a JSON object matching:\n"
         "{\n"
         '  "reply": "Conversational response summarizing what you updated and/or asking clear next questions.",\n'
         '  "changes_summary": ["Short bullet describing each change applied to the resume, or empty array [] if none"],\n'

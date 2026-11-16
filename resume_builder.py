@@ -1,10 +1,14 @@
+from copy import deepcopy
 import json
 import os
+import re
 import sys
 from pathlib import Path
 import questionary
 from rich.console import Console
 from docxtpl import DocxTemplate
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from db import (
     create_resume_db,
@@ -13,6 +17,7 @@ from db import (
     init_db,
     list_resumes_db,
     make_slug,
+    normalize_resume_schema,
     revert_version_db,
     update_resume_db,
 )
@@ -22,6 +27,31 @@ console = Console()
 TEMPLATE_PATH = Path('Base_Template.docx')
 _DATA_DIR = Path(os.environ['DATA_DIR']) if os.environ.get('DATA_DIR') else Path('.')
 SETTINGS_PATH = Path(os.environ['SETTINGS_PATH']) if os.environ.get('SETTINGS_PATH') else _DATA_DIR / 'settings.json'
+
+DEFAULT_GAP_PT = 6.0
+
+_STAT_PATTERN = re.compile(
+    r'(?<![A-Za-z0-9_\\/\x00-])'
+    r'(?:'
+        r'[$£€]\d+(?:[.,]\d+)*(?:[KkMmBbTt]\b|\+)?'
+        r'|'
+        r'\d+(?:[.,]\d+)*%'
+        r'|'
+        r'\d+(?:[.,]\d+)*[xX]\b'
+        r'|'
+        r'\d+(?:[.,]\d+)*(?:ms|us|ns|s|KB|MB|GB|TB|PB|Mbps|Gbps|rps|qps|fps)\b\+?'
+        r'|'
+        r'\d+(?:[.,]\d+)*(?:[KkMmBb]\+?(?![A-Za-z0-9])|\+)'
+        r'|'
+        r'\d{1,3}(?:,\d{3})+(?:\+)?'
+        r'|'
+        r'\d+(?:[.,]\d+)?(?:-bed|-person|-member|-hour|-day|-week)?(?=\s+(?:[a-z][A-Za-z-]*\s+)?(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|weeks?|months?|years?|users?|clients?|customers?|accounts?|patients?|students?|engineers?|developers?|nurses?|staff|baristas?|teams?|apps?|applications?|services?|microservices?|endpoints?|servers?|containers?|orders?|transactions?|requests?|tickets?|records?|CVEs?|bugs?|vulnerabilities|issues?|percent|times|shifts?|beds?)\b)'
+        r'|'
+        r'\d+(?:[.,]\d+)?(?:-(?:bed|person|member|hour|day|week))\b'
+    r')'
+)
+_BOLD_MD_PATTERN = re.compile(r'\*\*(.+?)\*\*')
+_ESCAPED_TOKEN_PATTERN = re.compile(r'\\(\d+(?:[.,]\d+)?[A-Za-z%+-]*|[$£€]\d+(?:[.,]\d+)*[A-Za-z%+-]*|\*|\\)')
 
 
 def init_app():
@@ -44,13 +74,228 @@ def save_settings(data):
         json.dump(data, f, indent=4)
 
 
+def _clamp_pt(value, default: float = DEFAULT_GAP_PT) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return round(max(0.0, min(24.0, num)), 2)
+
+
+def normalize_formatting_settings(raw_fmt: dict | None) -> dict:
+    """Normalize formatting settings with backward compatibility for standardize_skills_gap."""
+    fmt = raw_fmt if isinstance(raw_fmt, dict) else {}
+    header_gap = _clamp_pt(fmt.get("header_content_gap_pt"), DEFAULT_GAP_PT)
+    section_gap = _clamp_pt(fmt.get("section_gap_pt"), DEFAULT_GAP_PT)
+    entry_gap = _clamp_pt(fmt.get("entry_gap_pt"), DEFAULT_GAP_PT)
+
+    overrides: dict[str, float] = {}
+    raw_overrides = fmt.get("header_gap_overrides")
+    if isinstance(raw_overrides, dict):
+        for k, v in raw_overrides.items():
+            title = str(k or "").strip().upper()
+            if title:
+                overrides[title] = _clamp_pt(v, header_gap)
+    elif fmt.get("standardize_skills_gap") is False:
+        overrides["SKILLS"] = 0.0
+        overrides["TECHNICAL SKILLS"] = 0.0
+
+    return {
+        "header_content_gap_pt": header_gap,
+        "section_gap_pt": section_gap,
+        "entry_gap_pt": entry_gap,
+        "header_gap_overrides": overrides,
+        "auto_bold_stats": bool(fmt.get("auto_bold_stats", False)),
+    }
+
+
+def get_formatting_settings() -> dict:
+    """Load and normalize global formatting settings from settings.json."""
+    return normalize_formatting_settings(load_settings().get("formatting"))
+
+
 def build_render_context(data: dict) -> dict:
     """Attach global formatting settings to a copy of the resume payload before rendering."""
-    formatting = load_settings().get("formatting") or {}
+    fmt = get_formatting_settings()
+    skills_gap = fmt["header_gap_overrides"].get("SKILLS", fmt["header_content_gap_pt"])
     return {
         **data,
-        "standardize_skills_gap": bool(formatting.get("standardize_skills_gap", True)),
+        "standardize_skills_gap": skills_gap > 0,
     }
+
+
+def parse_formatted_segments(text: str, auto_bold_stats: bool = False) -> list[tuple[str, bool]]:
+    """Split text into (segment, is_bold) runs supporting **markdown**, \\escapes, and auto-bold stats."""
+    if not text:
+        return []
+
+    placeholders: dict[str, str] = {}
+
+    def _protect(m):
+        idx = len(placeholders)
+        tag = "".join(chr(65 + int(d)) for d in str(idx))
+        key = f"\x00ESC{tag}\x00"
+        placeholders[key] = m.group(1)
+        return key
+
+    protected = _ESCAPED_TOKEN_PATTERN.sub(_protect, text)
+
+    def _restore(s: str) -> str:
+        for k, v in placeholders.items():
+            s = s.replace(k, v)
+        return s
+
+    md_matches = list(_BOLD_MD_PATTERN.finditer(protected))
+    if md_matches:
+        segs: list[tuple[str, bool]] = []
+        pos = 0
+        for m in md_matches:
+            if m.start() > pos:
+                segs.append((_restore(protected[pos:m.start()]), False))
+            segs.append((_restore(m.group(1)), True))
+            pos = m.end()
+        if pos < len(protected):
+            segs.append((_restore(protected[pos:]), False))
+        return [(t, b) for t, b in segs if t]
+
+    if not auto_bold_stats:
+        return [(_restore(protected), False)]
+
+    segs = []
+    pos = 0
+    for m in _STAT_PATTERN.finditer(protected):
+        if m.start() > pos:
+            segs.append((_restore(protected[pos:m.start()]), False))
+        segs.append((_restore(m.group(0)), True))
+        pos = m.end()
+    if pos < len(protected):
+        segs.append((_restore(protected[pos:]), False))
+    return [(t, b) for t, b in segs if t]
+
+
+def _set_paragraph_spacing(p, before_pt: float | None = None, after_pt: float | None = None) -> None:
+    pPr = p._p.get_or_add_pPr()
+    spacing = pPr.find(qn("w:spacing"))
+    if spacing is None:
+        spacing = OxmlElement("w:spacing")
+        pPr.append(spacing)
+    if before_pt is not None:
+        spacing.set(qn("w:before"), str(max(0, round(before_pt * 20))))
+    if after_pt is not None:
+        spacing.set(qn("w:after"), str(max(0, round(after_pt * 20))))
+
+
+def _apply_formatted_runs_to_paragraph(p, text: str, auto_bold_stats: bool) -> None:
+    segments = parse_formatted_segments(text, auto_bold_stats=auto_bold_stats)
+    if not segments:
+        return
+    # Skip XML rewrite when plain unbolded text matches existing single run
+    if len(segments) == 1 and not segments[0][1] and segments[0][0] == text:
+        return
+
+    existing_runs = list(p._p.findall(qn("w:r")))
+    template_rPr = existing_runs[0].find(qn("w:rPr")) if existing_runs else None
+    for r in existing_runs:
+        p._p.remove(r)
+
+    for seg_text, is_bold in segments:
+        if not seg_text:
+            continue
+        r_el = OxmlElement("w:r")
+        rPr = deepcopy(template_rPr) if template_rPr is not None else OxmlElement("w:rPr")
+        if is_bold:
+            if rPr.find(qn("w:b")) is None:
+                rPr.append(OxmlElement("w:b"))
+            if rPr.find(qn("w:bCs")) is None:
+                rPr.append(OxmlElement("w:bCs"))
+        r_el.append(rPr)
+        t_el = OxmlElement("w:t")
+        if seg_text.startswith(" ") or seg_text.endswith(" ") or "  " in seg_text:
+            t_el.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        t_el.text = seg_text
+        r_el.append(t_el)
+        p._p.append(r_el)
+
+
+def _postprocess_rendered_docx(docx_doc, normalized_data: dict, fmt: dict) -> None:
+    """Apply standardized/custom gaps and inline bold formatting across rendered paragraphs."""
+    paragraphs = docx_doc.paragraphs
+    idx = 0
+    while idx < len(paragraphs):
+        pPr = paragraphs[idx]._p.pPr
+        if pPr is not None and pPr.find(qn("w:pBdr")) is not None:
+            break
+        idx += 1
+
+    sections = normalized_data.get("sections") or []
+    for sec_idx, sec in enumerate(sections):
+        if idx >= len(paragraphs):
+            break
+        heading_p = paragraphs[idx]
+        idx += 1
+        _set_paragraph_spacing(
+            heading_p,
+            before_pt=(2.0 if sec_idx == 0 else fmt["section_gap_pt"]),
+            after_pt=0.0,
+        )
+
+        sec_title = (sec.get("title") or "").strip().upper()
+        header_gap_pt = fmt["header_gap_overrides"].get(sec_title, fmt["header_content_gap_pt"])
+
+        if sec.get("is_skills"):
+            for skill_idx, _skill in enumerate(sec.get("items") or []):
+                if idx >= len(paragraphs):
+                    break
+                skill_p = paragraphs[idx]
+                idx += 1
+                _set_paragraph_spacing(
+                    skill_p,
+                    before_pt=(header_gap_pt if skill_idx == 0 else 0.0),
+                    after_pt=0.0,
+                )
+        else:
+            for item_idx, item in enumerate(sec.get("items") or []):
+                item_gap_pt = header_gap_pt if item_idx == 0 else fmt["entry_gap_pt"]
+                applied_item_gap = False
+
+                has_header = any((item.get(k) or "").strip() for k in ("role", "company", "location", "date"))
+                if has_header and idx < len(paragraphs):
+                    hdr_p = paragraphs[idx]
+                    idx += 1
+                    _set_paragraph_spacing(hdr_p, before_pt=item_gap_pt, after_pt=0.0)
+                    applied_item_gap = True
+
+                has_sub = any((item.get(k) or "").strip() for k in ("subtitle", "subtitle_right"))
+                if has_sub and idx < len(paragraphs):
+                    sub_p = paragraphs[idx]
+                    idx += 1
+                    _set_paragraph_spacing(sub_p, before_pt=(0.0 if applied_item_gap else item_gap_pt), after_pt=0.0)
+                    applied_item_gap = True
+
+                for detail in item.get("details") or []:
+                    if idx >= len(paragraphs):
+                        break
+                    det_p = paragraphs[idx]
+                    idx += 1
+                    det_before = 0.0 if applied_item_gap else item_gap_pt
+                    applied_item_gap = True
+                    _set_paragraph_spacing(det_p, before_pt=det_before, after_pt=0.0)
+                    _apply_formatted_runs_to_paragraph(
+                        det_p,
+                        detail.get("text") or "",
+                        auto_bold_stats=fmt["auto_bold_stats"],
+                    )
+
+
+def render_resume_docx(data: dict, out_path: Path) -> Path:
+    """Render a resume dictionary into Base_Template.docx with formatting settings applied."""
+    normalized = normalize_resume_schema(data)
+    fmt = get_formatting_settings()
+    doc = DocxTemplate(TEMPLATE_PATH)
+    doc.render(build_render_context(normalized), autoescape=True)
+    _postprocess_rendered_docx(doc.docx, normalized, fmt)
+    doc.save(out_path)
+    return out_path
 
 
 def confirm_deletion(item_name):
@@ -406,10 +651,8 @@ def generate_resume(data, out_stem=None):
         console.print(f'[green]Exported {out_json}![/green]')
         return
 
-    doc = DocxTemplate(TEMPLATE_PATH)
-    doc.render(build_render_context(data), autoescape=True)
     out_docx = Path(f"{stem}_generated.docx")
-    doc.save(out_docx)
+    render_resume_docx(data, out_docx)
     if fmt == "DOCX":
         console.print(f'[green]Successfully generated {out_docx}![/green]')
         return
