@@ -1313,12 +1313,12 @@ textarea:focus-visible {
   box-sizing: border-box;
   width: 8.5in;
   min-height: 11in;
-  padding: 0.3in 0.4in;
+  padding: 0.34in 0.4in 0.3in 0.4in;
   background-color: #ffffff;
   color: #000000;
   font-family: var(--font-paper);
   font-size: 10pt;
-  line-height: 1.14;
+  line-height: 1.24;
   box-shadow: var(--shadow-paper);
   border: 1px solid #cbd5e1;
 }
@@ -1327,8 +1327,8 @@ textarea:focus-visible {
   text-align: center;
   font-size: 20pt;
   font-weight: 700;
-  margin: 3pt 0 0 0;
-  line-height: 1.1;
+  margin: 0;
+  line-height: 1.24;
   color: #000000;
 }
 
@@ -1336,13 +1336,13 @@ textarea:focus-visible {
   text-align: center;
   text-indent: 36pt;
   font-size: 10pt;
-  margin: 0;
-  line-height: 1.14;
+  margin: 1pt 0 0 0;
+  line-height: 1.24;
   color: #000000;
 }
 
 .paper-section {
-  margin-top: 5.5pt;
+  margin-top: 6.5pt;
 }
 
 .paper-section:first-of-type {
@@ -1356,18 +1356,18 @@ textarea:focus-visible {
   border-bottom: 1pt solid #000000;
   padding-bottom: 1pt;
   margin: 0;
-  line-height: 1.05;
+  line-height: 1.22;
 }
 
 .paper-skill-row {
   margin: 0;
   font-size: 10pt;
-  line-height: 1.14;
+  line-height: 1.24;
   text-align: justify;
 }
 
 .paper-skill-row-first {
-  margin-top: 5.5pt;
+  margin-top: 6pt;
 }
 
 .paper-skill-cat {
@@ -1375,7 +1375,7 @@ textarea:focus-visible {
 }
 
 .paper-item {
-  margin-top: 5.5pt;
+  margin-top: 6pt;
   margin-bottom: 0;
 }
 
@@ -1422,13 +1422,15 @@ textarea:focus-visible {
 
 .paper-detail-bullet {
   margin: 0;
-  line-height: 1.14;
+  line-height: 1.24;
+  white-space: pre-line;
 }
 
 .paper-detail-prose {
   margin: 0;
   font-style: italic;
-  line-height: 1.14;
+  line-height: 1.24;
+  white-space: pre-line;
 }
 
 /* Native PDF Preview */
@@ -2312,6 +2314,30 @@ textarea:focus-visible {
   flex-direction: column;
   gap: 2px;
   color: var(--text-secondary);
+}
+
+.ai-changes-banner.is-pending {
+  background-color: var(--bg-surface);
+  border-color: var(--blue-tint-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.ai-changes-banner.is-dismissed {
+  background-color: var(--bg-subtle);
+  border-color: var(--border-default);
+  opacity: 0.8;
+}
+
+.ai-changes-banner.is-dismissed .ai-changes-title {
+  color: var(--text-muted);
+}
+
+.ai-changes-actions {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 /* Create New Resume Choice Modal */

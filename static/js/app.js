@@ -25,6 +25,8 @@
     renameSectionIdx: null,
     deleteTargetId: null,
     deleteTargetName: '',
+    deleteChatTargetId: null,
+    deleteChatTargetTitle: '',
     aiOpen: false,
     aiTarget: null, // { secIdx, itemIdx, detailIdx }
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
@@ -156,6 +158,10 @@
     deleteTargetName: document.getElementById('deleteTargetName'),
     confirmDeleteInput: document.getElementById('confirmDeleteInput'),
     btnConfirmDeleteResume: document.getElementById('btnConfirmDeleteResume'),
+
+    modalDeleteChat: document.getElementById('modalDeleteChat'),
+    deleteChatTargetTitle: document.getElementById('deleteChatTargetTitle'),
+    btnConfirmDeleteChat: document.getElementById('btnConfirmDeleteChat'),
 
     modalHistory: document.getElementById('modalHistory'),
     historyList: document.getElementById('historyList'),
@@ -2457,14 +2463,14 @@
       welcome.innerHTML = `
         <div class="ai-msg-bubble">${
           hasExisting
-            ? 'Your current resume is loaded. Tell me what you would like to add, rewrite, or reorganize—or switch back to the Manual Wizard anytime.'
-            : 'Describe your background, target role, work history, education, and skills in your own words. I will populate your resume structure live on the right as we go, and you can switch to the Manual Wizard anytime.'
+            ? 'Your current resume is loaded. Tell me what you would like to add, rewrite, or reorganize—I will outline any proposed edits and ask before applying them.'
+            : 'Describe your background, target role, work history, education, and skills in your own words. I will propose structured updates for you to review and apply with one click.'
         }</div>
       `;
       el.fullAiMessages.appendChild(welcome);
     }
 
-    state.fullAiMessages.forEach((msg) => {
+    state.fullAiMessages.forEach((msg, msgIdx) => {
       const wrap = document.createElement('div');
       wrap.className = `ai-msg ai-msg-${msg.role}`;
 
@@ -2480,14 +2486,46 @@
         wrap.appendChild(bubble);
       }
 
-      if (msg.role === 'assistant' && Array.isArray(msg.changes) && msg.changes.length > 0) {
+      const hasProposal = msg.role === 'assistant' && msg.proposed_resume && typeof msg.proposed_resume === 'object';
+      const hasChangesList = msg.role === 'assistant' && Array.isArray(msg.changes) && msg.changes.length > 0;
+      if (hasProposal || hasChangesList) {
+        const status = hasProposal ? (msg.proposal_status || 'pending') : 'applied';
         const banner = document.createElement('div');
-        banner.className = 'ai-changes-banner';
-        const itemsHtml = msg.changes.map((c) => `<li>${renderInlineMarkdown(c)}</li>`).join('');
+        banner.className = `ai-changes-banner is-${status}`;
+        const listItems = hasChangesList
+          ? msg.changes.map((c) => `<li>${renderInlineMarkdown(c)}</li>`).join('')
+          : '<li>Updated resume draft ready for your review.</li>';
+        const titleText =
+          status === 'pending'
+            ? 'Proposed Changes (Authorization Required)'
+            : status === 'dismissed'
+              ? 'Proposed Changes (Dismissed)'
+              : 'Applied to Live Resume';
         banner.innerHTML = `
-          <div class="ai-changes-title">Applied to Live Resume</div>
-          <ul class="ai-changes-list">${itemsHtml}</ul>
+          <div class="ai-changes-title">${titleText}</div>
+          <ul class="ai-changes-list">${listItems}</ul>
         `;
+
+        if (hasProposal && status === 'pending') {
+          const actions = document.createElement('div');
+          actions.className = 'ai-changes-actions';
+
+          const btnDismiss = document.createElement('button');
+          btnDismiss.type = 'button';
+          btnDismiss.className = 'btn btn-ghost btn-xs';
+          btnDismiss.textContent = 'Dismiss';
+          btnDismiss.addEventListener('click', () => dismissFullAiProposal(msgIdx));
+
+          const btnApply = document.createElement('button');
+          btnApply.type = 'button';
+          btnApply.className = 'btn btn-primary btn-xs';
+          btnApply.textContent = 'Apply Changes';
+          btnApply.addEventListener('click', () => applyFullAiProposal(msgIdx));
+
+          actions.append(btnDismiss, btnApply);
+          banner.appendChild(actions);
+        }
+
         wrap.appendChild(banner);
       }
 
@@ -2497,7 +2535,7 @@
     if (state.fullAiLoading) {
       const loading = document.createElement('div');
       loading.className = 'ai-msg ai-msg-assistant';
-      loading.innerHTML = '<div class="ai-msg-bubble ai-msg-loading">Updating resume draft...</div>';
+      loading.innerHTML = '<div class="ai-msg-bubble ai-msg-loading">Drafting proposed changes...</div>';
       el.fullAiMessages.appendChild(loading);
     }
 
@@ -2552,7 +2590,7 @@
       delBtn.innerHTML = '<i data-lucide="trash-2"></i>';
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteFullAiChat(chat.id);
+        openDeleteChatModal(chat.id, chat.title || 'New Chat');
       });
 
       row.append(body, delBtn);
@@ -2652,6 +2690,14 @@
     renderFullAiSidebar();
   }
 
+  function openDeleteChatModal(chatId, chatTitle) {
+    state.deleteChatTargetId = chatId;
+    state.deleteChatTargetTitle = chatTitle || 'New Chat';
+    el.deleteChatTargetTitle.textContent = `"${state.deleteChatTargetTitle}"`;
+    openModal(el.modalDeleteChat);
+    el.btnConfirmDeleteChat.focus();
+  }
+
   async function deleteFullAiChat(chatId) {
     try {
       await fetchJson(`/api/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
@@ -2701,27 +2747,12 @@
         }),
       });
 
-      if (res.updated_resume && typeof res.updated_resume === 'object') {
-        state.lastAiUndoState = JSON.parse(JSON.stringify(state.data));
-        const preservedHistory = state.data._history;
-        state.data = res.updated_resume;
-        if (preservedHistory !== undefined) {
-          state.data._history = preservedHistory;
-        }
-        el.btnFullAiUndo.hidden = false;
-        setDirty(true, true);
-        updateWizardHeaderMeta();
-        bindContactFields();
-        renderPreview();
-        if ((state.data?.name || '').trim()) {
-          await saveCurrentResume({ saveMode: 'ai', silent: true }).catch(() => {});
-        }
-      }
-
+      const hasProposal = Boolean(res.updated_resume && typeof res.updated_resume === 'object');
       state.fullAiMessages.push({
         role: 'assistant',
-        content: res.reply || 'Updated your resume.',
+        content: res.reply || (hasProposal ? 'Here are the proposed resume updates. Click Apply Changes when ready.' : 'Here is my response.'),
         changes: Array.isArray(res.changes_summary) ? res.changes_summary : [],
+        ...(hasProposal ? { proposed_resume: res.updated_resume, proposal_status: 'pending' } : {}),
       });
     } catch (err) {
       state.fullAiMessages.push({
@@ -2737,6 +2768,42 @@
       renderFullAiQuickChips();
       el.fullAiInput.focus();
     }
+  }
+
+  async function applyFullAiProposal(msgIdx) {
+    const msg = state.fullAiMessages[msgIdx];
+    if (!msg || !msg.proposed_resume || typeof msg.proposed_resume !== 'object') return;
+    state.lastAiUndoState = JSON.parse(JSON.stringify(state.data));
+    const preservedHistory = state.data?._history;
+    state.data = JSON.parse(JSON.stringify(msg.proposed_resume));
+    if (preservedHistory !== undefined) {
+      state.data._history = preservedHistory;
+    }
+    state.fullAiMessages.forEach((m, idx) => {
+      if (m.proposed_resume && m.proposal_status === 'pending' && idx !== msgIdx) {
+        m.proposal_status = 'dismissed';
+      }
+    });
+    msg.proposal_status = 'applied';
+    el.btnFullAiUndo.hidden = false;
+    setDirty(true, true);
+    updateWizardHeaderMeta();
+    bindContactFields();
+    renderPreview();
+    renderFullAiThread();
+    if ((state.data?.name || '').trim()) {
+      await saveCurrentResume({ saveMode: 'ai', silent: true }).catch(() => {});
+    }
+    await persistFullAiChat().catch(() => {});
+    showToast('Applied proposed AI changes to your resume.', 'success');
+  }
+
+  async function dismissFullAiProposal(msgIdx) {
+    const msg = state.fullAiMessages[msgIdx];
+    if (!msg || !msg.proposed_resume) return;
+    msg.proposal_status = 'dismissed';
+    renderFullAiThread();
+    await persistFullAiChat().catch(() => {});
   }
 
   function undoLastFullAiChange() {
@@ -2924,7 +2991,7 @@
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalDeleteChat, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
       }
     });
 
@@ -2978,6 +3045,20 @@
         await loadResumeList();
       } catch (err) {
         showToast(err.message, 'error');
+      }
+    });
+
+    el.btnConfirmDeleteChat.addEventListener('click', async () => {
+      if (!state.deleteChatTargetId) return;
+      const targetId = state.deleteChatTargetId;
+      el.btnConfirmDeleteChat.disabled = true;
+      try {
+        await deleteFullAiChat(targetId);
+        closeModal(el.modalDeleteChat);
+        state.deleteChatTargetId = null;
+        state.deleteChatTargetTitle = '';
+      } finally {
+        el.btnConfirmDeleteChat.disabled = false;
       }
     });
 

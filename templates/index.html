@@ -658,6 +658,25 @@
     </div>
   </div>
 
+  <!-- Modal: Delete AI Chat Confirmation -->
+  <div id="modalDeleteChat" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalDeleteChatTitle">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-header">
+        <h3 id="modalDeleteChatTitle">Delete AI Chat</h3>
+        <button class="btn btn-ghost btn-xs modal-close" data-close="modalDeleteChat" aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="danger-warning">Are you sure you want to delete <strong id="deleteChatTargetTitle"></strong>? This permanently removes the saved conversation and cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalDeleteChat">Cancel</button>
+        <button type="button" id="btnConfirmDeleteChat" class="btn btn-danger">Delete Chat</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Version History -->
   <div id="modalHistory" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalHistoryTitle">
     <div class="modal-dialog modal-lg">

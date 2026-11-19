@@ -42,6 +42,7 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 pdf_lock = threading.Lock()
+_settings_lock = threading.Lock()
 _db_initialized = False
 _db_lock = threading.Lock()
 
@@ -383,23 +384,24 @@ def get_settings_api():
 @app.route("/api/settings", methods=["PUT"])
 def update_settings_api():
     payload = request.get_json(silent=True) or {}
-    settings = load_settings()
-    api_keys = payload.get("api_keys")
-    if isinstance(api_keys, dict):
-        cleaned = {k: v.strip() for k, v in api_keys.items() if isinstance(v, str) and v.strip()}
-        settings["api_keys"] = cleaned
-    ai_cfg = payload.get("ai")
-    if isinstance(ai_cfg, dict):
-        settings["ai"] = {
-            "provider": (ai_cfg.get("provider") or "OpenAI").strip(),
-            "model": (ai_cfg.get("model") or "gpt-4o-mini").strip(),
-        }
-    fmt_cfg = payload.get("formatting")
-    if isinstance(fmt_cfg, dict):
-        settings["formatting"] = {
-            "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
-        }
-    save_settings(settings)
+    with _settings_lock:
+        settings = load_settings()
+        api_keys = payload.get("api_keys")
+        if isinstance(api_keys, dict):
+            cleaned = {k: v.strip() for k, v in api_keys.items() if isinstance(v, str) and v.strip()}
+            settings["api_keys"] = cleaned
+        ai_cfg = payload.get("ai")
+        if isinstance(ai_cfg, dict):
+            settings["ai"] = {
+                "provider": (ai_cfg.get("provider") or "OpenAI").strip(),
+                "model": (ai_cfg.get("model") or "gpt-4o-mini").strip(),
+            }
+        fmt_cfg = payload.get("formatting")
+        if isinstance(fmt_cfg, dict):
+            settings["formatting"] = {
+                "standardize_skills_gap": bool(fmt_cfg.get("standardize_skills_gap", True)),
+            }
+        save_settings(settings)
     return jsonify({"settings": settings})
 
 
@@ -479,11 +481,12 @@ def build_bullet_system_prompt(context: dict) -> str:
         f"{style_section}"
         "Interaction Guidelines:\n"
         "1. Never invent metrics, technologies, responsibilities, or achievements the user has not stated.\n"
-        "2. If the user has not yet described what they did—or if asking for numbers/scale (e.g., %, $, time saved, "
+        "2. Only add, change, or revise details the user has directly asked for or authorized; do not introduce unrequested topics or claims.\n"
+        "3. If the user has not yet described what they did—or if asking for numbers/scale (e.g., %, $, time saved, "
         "user volume) would turn a generic line into an XYZ bullet—ask 1 to 3 concise, specific questions.\n"
-        "3. When you have enough information (or when the user asks for examples or rewrites), provide 2 to 3 "
+        "4. When you have enough information (or when the user asks for examples or rewrites), provide 2 to 3 "
         "distinct, crisp options (e.g., 'Impact-Focused (1-line)', 'Technical', 'Concise').\n"
-        "4. Avoid generic fluff and exaggerated buzzwords.\n\n"
+        "5. Avoid generic fluff and exaggerated buzzwords.\n\n"
         "You MUST respond strictly with a JSON object matching this schema:\n"
         "{\n"
         '  "reply": "Short conversational message or 1-3 clear clarifying questions.",\n'
@@ -543,18 +546,20 @@ def build_full_resume_system_prompt(resume_data: dict) -> str:
         f"{SHARED_BULLET_GUIDE}\n\n"
         "Guidelines:\n"
         "1. Never fabricate employers, degrees, dates, projects, technologies, or metrics the user has not provided.\n"
-        "2. Whenever the user shares facts (name, contact info, education, roles, projects, bullet ideas, or skills), "
-        "incorporate them into `updated_resume` right away—formatting bullet points to match the Bullet Point Writing Standards above—"
-        "while preserving ALL existing resume data they did not ask to remove.\n"
-        "3. Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for standard entries.\n"
-        "4. Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
-        "5. If user descriptions lack numbers or measurable outcomes, still draft clean initial bullets from known facts AND "
+        "2. Treat `Current Resume JSON State` above as the authoritative, live source of truth—the user may have edited fields manually in the editor since earlier messages in the chat.\n"
+        "3. Strictly scope changes to what the user directly asked or authorized in their latest request: ONLY add, update, or remove sections, entries, bullets, skills, or contact fields that they explicitly requested or authorized. Do NOT proactively add unrequested sections (such as a Professional Summary) or unrequested edits.\n"
+        "4. Copy every untouched section, item, bullet, prose text, newline, and field VERBATIM character-for-character from `Current Resume JSON State` into `updated_resume`. NEVER rephrase, 'polish', overwrite, or revert manual edits back to wording from earlier chat turns.\n"
+        "5. Whenever you propose resume edits, ALWAYS describe in `reply` (and list in `changes_summary`) the exact items/sections you plan to add, edit, or remove, and explicitly ask whether the user authorizes applying those changes or wants revisions first—the UI holds `updated_resume` as a preview proposal until the user clicks Apply.\n"
+        "6. When incorporating user-requested facts (name, contact info, education, roles, projects, bullet ideas, or skills), format newly proposed bullets cleanly per the Bullet Point Writing Standards above.\n"
+        "7. Use `is_skills: true` ONLY for two-column key-value sections (`category` + `text`), and `is_skills: false` for standard entries.\n"
+        "8. Always uppercase section `title` strings, and omit leading bullet symbols ('•', '-', '*') inside `details[].text`.\n"
+        "9. If user descriptions for the requested change lack numbers or measurable outcomes, still draft clean initial bullets from known facts AND "
         "ask 2 to 4 focused questions in `reply` (asking for stats/metrics/scale or missing resume sections next).\n"
-        "6. You MUST respond strictly with a JSON object matching:\n"
+        "10. You MUST respond strictly with a JSON object matching:\n"
         "{\n"
-        '  "reply": "Conversational response summarizing what you updated and/or asking clear next questions.",\n'
-        '  "changes_summary": ["Short bullet describing each change applied to the resume, or empty array [] if none"],\n'
-        '  "updated_resume": <full updated resume object matching the schema above, or null if no resume fields changed>\n'
+        '  "reply": "Conversational response clearly stating every addition/change you are proposing and asking if the user wants to apply them or make any edits first.",\n'
+        '  "changes_summary": ["Short bullet describing each proposed addition, edit, or removal, or empty array [] if none"],\n'
+        '  "updated_resume": <full proposed resume object matching the schema above, or null if no authorized changes were requested>\n'
         "}"
     )
 
@@ -602,6 +607,53 @@ def _parse_ai_json_response(content_str: str) -> dict:
     }
 
 
+class _UnsupportedTemperatureError(ValueError):
+    """Raised when an AI provider returns HTTP 400 rejecting the temperature parameter."""
+
+
+def _is_temperature_unsupported_error(status_code: int, err_json: dict | None, err_msg: str) -> bool:
+    """Strictly detect HTTP 400 provider errors rejecting the temperature parameter."""
+    if status_code != 400:
+        return False
+    if isinstance(err_json, dict) and isinstance(err_json.get("error"), dict):
+        err_obj = err_json["error"]
+        param = err_obj.get("param")
+        code = str(err_obj.get("code") or "").lower()
+        if param is not None and str(param).strip() != "":
+            if str(param).strip().lower() != "temperature":
+                return False
+            return code in ("unsupported_value", "unsupported_parameter", "")
+    msg_lower = (err_msg or "").lower()
+    return bool(
+        re.search(
+            r"(unsupported (value|parameter)|not supported|does not support)[^.\n]{0,25}\btemperature\b"
+            r"|\btemperature\b[^.\n]{0,30}(is not supported|not supported|does not support|unsupported|only the default)",
+            msg_lower,
+        )
+    )
+
+
+def _get_model_temperature_support(provider_name: str, model: str) -> bool | None:
+    """Return cached temperature support for provider:model, or None if not yet probed."""
+    with _settings_lock:
+        caps = load_settings().get("model_capabilities") or {}
+    entry = caps.get(f"{provider_name}:{model}")
+    if isinstance(entry, dict) and isinstance(entry.get("supports_temperature"), bool):
+        return entry["supports_temperature"]
+    if provider_name == "OpenAI" and model.startswith(("o1", "o3", "o4")):
+        return False
+    return None
+
+
+def _save_model_temperature_support(provider_name: str, model: str, supports_temperature: bool) -> None:
+    """Persist whether a model accepts custom temperature so future requests skip probing."""
+    with _settings_lock:
+        settings = load_settings()
+        caps = settings.setdefault("model_capabilities", {})
+        caps[f"{provider_name}:{model}"] = {"supports_temperature": supports_temperature}
+        save_settings(settings)
+
+
 def _post_json_api(url: str, headers: dict, body: dict, provider_name: str) -> dict:
     """Send a JSON POST request to an AI provider API and normalize error messages."""
     req = urllib.request.Request(
@@ -615,6 +667,7 @@ def _post_json_api(url: str, headers: dict, body: dict, provider_name: str) -> d
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         err_text = e.read().decode("utf-8", errors="replace")
+        err_json = None
         try:
             err_json = json.loads(err_text)
             err_msg = (
@@ -624,6 +677,8 @@ def _post_json_api(url: str, headers: dict, body: dict, provider_name: str) -> d
             ) or err_text
         except Exception:
             err_msg = err_text
+        if _is_temperature_unsupported_error(e.code, err_json, err_msg):
+            raise _UnsupportedTemperatureError(f"{provider_name} API error ({e.code}): {err_msg}")
         if e.code in (401, 403):
             raise ValueError(f"Invalid or unauthorized {provider_name} API key. Please check Settings.")
         if e.code == 429:
@@ -633,8 +688,38 @@ def _post_json_api(url: str, headers: dict, body: dict, provider_name: str) -> d
         raise ValueError(f"Network error contacting {provider_name}: {e.reason}")
 
 
+def _post_with_temperature_fallback(
+    url: str,
+    headers: dict,
+    body: dict,
+    provider_name: str,
+    model: str,
+    temp_container_key: str | None = None,
+) -> dict:
+    """Send request with temperature=0.4 when supported; retry without temperature and cache on HTTP 400."""
+    target = body[temp_container_key] if temp_container_key else body
+    known_support = _get_model_temperature_support(provider_name, model)
+    if known_support is False:
+        target.pop("temperature", None)
+        return _post_json_api(url, headers, body, provider_name)
+
+    target["temperature"] = 0.4
+    try:
+        raw = _post_json_api(url, headers, body, provider_name)
+    except _UnsupportedTemperatureError:
+        target.pop("temperature", None)
+        raw = _post_json_api(url, headers, body, provider_name)
+        _save_model_temperature_support(provider_name, model, False)
+        return raw
+
+    if known_support is None:
+        _save_model_temperature_support(provider_name, model, True)
+    return raw
+
+
 def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: list) -> dict:
     """Call OpenAI Chat Completions API with JSON response_format."""
+    target_model = model or "gpt-4o-mini"
     api_messages = [{"role": "system", "content": system_prompt}]
     for msg in messages:
         role = msg.get("role")
@@ -643,18 +728,16 @@ def call_openai_chat(api_key: str, model: str, system_prompt: str, messages: lis
             api_messages.append({"role": role, "content": content})
 
     body: dict = {
-        "model": model or "gpt-4o-mini",
+        "model": target_model,
         "messages": api_messages,
         "response_format": {"type": "json_object"},
     }
-    if not (model or "").startswith(("o1", "o3", "o4")):
-        body["temperature"] = 0.4
-
-    raw = _post_json_api(
+    raw = _post_with_temperature_fallback(
         "https://api.openai.com/v1/chat/completions",
         {"Authorization": f"Bearer {api_key}"},
         body,
         "OpenAI",
+        target_model,
     )
     content_str = raw["choices"][0]["message"]["content"]
     return _parse_ai_json_response(content_str)
@@ -677,17 +760,18 @@ def call_gemini_chat(api_key: str, model: str, system_prompt: str, messages: lis
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.4,
             "responseMimeType": "application/json",
         },
     }
     encoded_model = urllib.parse.quote(target_model, safe="-.")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{encoded_model}:generateContent"
-    raw = _post_json_api(
+    raw = _post_with_temperature_fallback(
         url,
         {"x-goog-api-key": api_key},
         body,
         "Gemini",
+        target_model,
+        temp_container_key="generationConfig",
     )
     candidates = raw.get("candidates") or []
     parts = (candidates[0].get("content") or {}).get("parts") or [] if candidates else []
@@ -708,11 +792,10 @@ def call_claude_chat(api_key: str, model: str, system_prompt: str, messages: lis
     body = {
         "model": target_model,
         "max_tokens": 4096,
-        "temperature": 0.4,
         "system": system_prompt + "\n\nRespond with a valid JSON object only (no markdown code fences).",
         "messages": api_messages,
     }
-    raw = _post_json_api(
+    raw = _post_with_temperature_fallback(
         "https://api.anthropic.com/v1/messages",
         {
             "x-api-key": api_key,
@@ -720,6 +803,7 @@ def call_claude_chat(api_key: str, model: str, system_prompt: str, messages: lis
         },
         body,
         "Claude",
+        target_model,
     )
     blocks = raw.get("content") or []
     content_str = "".join(

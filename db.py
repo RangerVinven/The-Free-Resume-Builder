@@ -644,6 +644,10 @@ def _clean_chat_messages(raw_messages: Any) -> list[dict]:
         item: dict[str, Any] = {"role": role, "content": content}
         if role == "assistant" and isinstance(msg.get("changes"), list):
             item["changes"] = [str(c).strip() for c in msg["changes"] if str(c).strip()]
+        if role == "assistant" and isinstance(msg.get("proposed_resume"), dict):
+            item["proposed_resume"] = normalize_resume_schema(msg["proposed_resume"])
+            status = msg.get("proposal_status")
+            item["proposal_status"] = status if status in ("pending", "applied", "dismissed") else "pending"
         cleaned.append(item)
     return cleaned
 
