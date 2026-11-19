@@ -25,14 +25,18 @@
     renameSectionIdx: null,
     deleteTargetId: null,
     deleteTargetName: '',
-    deleteChatTargetId: null,
-    deleteChatTargetTitle: '',
     aiOpen: false,
     aiTarget: null, // { secIdx, itemIdx, detailIdx }
     aiMessages: [], // { role: 'user'|'assistant', content: string, suggestions?: Array }
     aiLoading: false,
     aiConfig: { provider: 'OpenAI', model: 'gpt-4o-mini', hasActiveKey: false },
-    formatting: { standardize_skills_gap: true },
+    formatting: {
+      header_content_gap_pt: 6,
+      section_gap_pt: 6,
+      entry_gap_pt: 6,
+      header_gap_overrides: {},
+      auto_bold_stats: false,
+    },
     editorMode: 'manual', // 'manual' | 'ai'
     fullAiChats: [], // [{ id, title, message_count, updated_at }]
     activeFullAiChatId: null,
@@ -52,8 +56,10 @@
     wizardTopActions: document.getElementById('wizardTopActions'),
     importJsonFileInput: document.getElementById('importJsonFileInput'),
     btnDirImportJson: document.getElementById('btnDirImportJson'),
+    btnDirTour: document.getElementById('btnDirTour'),
     btnDirSettings: document.getElementById('btnDirSettings'),
     btnDirNewResume: document.getElementById('btnDirNewResume'),
+    btnWizTour: document.getElementById('btnWizTour'),
     btnWizSettings: document.getElementById('btnWizSettings'),
     saveStatus: document.getElementById('saveStatus'),
     saveStatusText: document.getElementById('saveStatusText'),
@@ -128,6 +134,7 @@
     // Preview Pane
     modeLiveHtml: document.getElementById('modeLiveHtml'),
     modeNativePdf: document.getElementById('modeNativePdf'),
+    livePageBadge: document.getElementById('livePageBadge'),
     btnRefreshPdf: document.getElementById('btnRefreshPdf'),
     zoomControls: document.getElementById('zoomControls'),
     btnZoomOut: document.getElementById('btnZoomOut'),
@@ -159,9 +166,11 @@
     confirmDeleteInput: document.getElementById('confirmDeleteInput'),
     btnConfirmDeleteResume: document.getElementById('btnConfirmDeleteResume'),
 
-    modalDeleteChat: document.getElementById('modalDeleteChat'),
-    deleteChatTargetTitle: document.getElementById('deleteChatTargetTitle'),
-    btnConfirmDeleteChat: document.getElementById('btnConfirmDeleteChat'),
+    modalConfirmAction: document.getElementById('modalConfirmAction'),
+    modalConfirmTitle: document.getElementById('modalConfirmTitle'),
+    modalConfirmMessage: document.getElementById('modalConfirmMessage'),
+    modalConfirmPreview: document.getElementById('modalConfirmPreview'),
+    btnConfirmAction: document.getElementById('btnConfirmAction'),
 
     modalHistory: document.getElementById('modalHistory'),
     historyList: document.getElementById('historyList'),
@@ -174,11 +183,35 @@
     keyGemini: document.getElementById('keyGemini'),
     keyClaude: document.getElementById('keyClaude'),
     keyOther: document.getElementById('keyOther'),
-    settingStandardizeSkillsGap: document.getElementById('settingStandardizeSkillsGap'),
+    resumeFormattingSettingsLockedNote: document.getElementById('resumeFormattingSettingsLockedNote'),
+    resumeFormattingSettingsGroup: document.getElementById('resumeFormattingSettingsGroup'),
+    resumeFormattingTargetLabel: document.getElementById('resumeFormattingTargetLabel'),
+    settingHeaderContentGap: document.getElementById('settingHeaderContentGap'),
+    settingSectionGap: document.getElementById('settingSectionGap'),
+    settingEntryGap: document.getElementById('settingEntryGap'),
+    headerGapOverridesList: document.getElementById('headerGapOverridesList'),
+    btnAddHeaderOverride: document.getElementById('btnAddHeaderOverride'),
+    headerOverrideSuggestions: document.getElementById('headerOverrideSuggestions'),
+    settingAutoBoldStats: document.getElementById('settingAutoBoldStats'),
 
     modalCreateMode: document.getElementById('modalCreateMode'),
     btnChooseManualCreate: document.getElementById('btnChooseManualCreate'),
     btnChooseAiCreate: document.getElementById('btnChooseAiCreate'),
+
+    // Interactive Tour
+    tourWelcomeBanner: document.getElementById('tourWelcomeBanner'),
+    btnStartWelcomeTour: document.getElementById('btnStartWelcomeTour'),
+    btnDismissWelcomeTour: document.getElementById('btnDismissWelcomeTour'),
+    tourOverlay: document.getElementById('tourOverlay'),
+    tourSpotlight: document.getElementById('tourSpotlight'),
+    tourPopover: document.getElementById('tourPopover'),
+    tourStepCounter: document.getElementById('tourStepCounter'),
+    tourStepTitle: document.getElementById('tourStepTitle'),
+    tourStepBody: document.getElementById('tourStepBody'),
+    btnTourClose: document.getElementById('btnTourClose'),
+    btnTourSkip: document.getElementById('btnTourSkip'),
+    btnTourPrev: document.getElementById('btnTourPrev'),
+    btnTourNext: document.getElementById('btnTourNext'),
 
     // Full-Resume AI Builder View
     aiChatsSidebar: document.getElementById('aiChatsSidebar'),
@@ -477,6 +510,28 @@
 
   function closeModal(modalEl) {
     modalEl.hidden = true;
+    if (modalEl === el.modalConfirmAction) {
+      pendingConfirmFn = null;
+    }
+  }
+
+  let pendingConfirmFn = null;
+
+  function openConfirmModal({ title, message, previewText = '', confirmLabel = 'Delete', onConfirm }) {
+    el.modalConfirmTitle.textContent = title || 'Are you sure?';
+    el.modalConfirmMessage.textContent = message || 'Are you sure you want to proceed?';
+    const cleanPreview = String(previewText || '').trim();
+    if (cleanPreview) {
+      el.modalConfirmPreview.textContent = cleanPreview.length > 220 ? `${cleanPreview.slice(0, 217)}...` : cleanPreview;
+      el.modalConfirmPreview.hidden = false;
+    } else {
+      el.modalConfirmPreview.textContent = '';
+      el.modalConfirmPreview.hidden = true;
+    }
+    el.btnConfirmAction.textContent = confirmLabel;
+    pendingConfirmFn = onConfirm;
+    openModal(el.modalConfirmAction);
+    el.btnConfirmAction.focus();
   }
 
   function swapItems(arr, i, j) {
@@ -603,6 +658,10 @@
     el.wizardTopContext.hidden = true;
     el.wizardTopActions.hidden = true;
     el.directoryTopActions.hidden = false;
+
+    if (el.tourWelcomeBanner) {
+      el.tourWelcomeBanner.hidden = Boolean(localStorage.getItem('rb_tour_completed'));
+    }
 
     await loadResumeList();
   }
@@ -850,6 +909,7 @@
       portfolio: '',
       linkedin: '',
       sections: [],
+      formatting: normalizeFormattingConfig({}),
     };
     setDirty(false, true);
     enterWizardView(initialMode);
@@ -867,6 +927,7 @@
     if (!Array.isArray(state.data.sections)) {
       state.data.sections = [];
     }
+    state.data.formatting = normalizeFormattingConfig(state.data.formatting);
     state.wizardStep = startStep;
     state.activeSectionIdx = 0;
     state.fullAiChats = [];
@@ -1243,15 +1304,20 @@
         }),
         makeIconButton('pencil', 'Edit section', false, () => openEditSectionModal(idx)),
         makeIconButton('trash-2', 'Delete section', false, () => {
-          if (confirm(`Delete section "${sec.title}" and all of its entries?`)) {
-            sections.splice(idx, 1);
-            if (state.activeSectionIdx >= sections.length) {
-              state.activeSectionIdx = Math.max(0, sections.length - 1);
-            }
-            setDirty(true);
-            renderStage2Outline();
-            renderPreview();
-          }
+          openConfirmModal({
+            title: 'Delete Section?',
+            message: `Are you sure you want to delete "${sec.title}" and all of its entries?`,
+            confirmLabel: 'Delete Section',
+            onConfirm: () => {
+              sections.splice(idx, 1);
+              if (state.activeSectionIdx >= sections.length) {
+                state.activeSectionIdx = Math.max(0, sections.length - 1);
+              }
+              setDirty(true);
+              renderStage2Outline();
+              renderPreview();
+            },
+          });
         }, 'btn-danger-hover')
       );
 
@@ -1455,12 +1521,18 @@
         renderPreview();
       }),
       makeIconButton('trash-2', 'Delete entry', false, () => {
-        if (confirm('Delete this entry?')) {
-          sec.items.splice(itemIdx, 1);
-          setDirty(true);
-          renderActiveSectionCard(sec, state.activeSectionIdx);
-          renderPreview();
-        }
+        const entryLabel = getItemSummaryLabel(item, isSkills, itemIdx);
+        openConfirmModal({
+          title: 'Delete Entry?',
+          message: `Are you sure you want to delete "${entryLabel}"?`,
+          confirmLabel: 'Delete Entry',
+          onConfirm: () => {
+            sec.items.splice(itemIdx, 1);
+            setDirty(true);
+            renderActiveSectionCard(sec, state.activeSectionIdx);
+            renderPreview();
+          },
+        });
       }, 'btn-danger-hover')
     );
 
@@ -1669,13 +1741,22 @@
             renderPreview();
           }),
           makeIconButton('x', 'Delete detail', false, () => {
-            details.splice(dIdx, 1);
-            if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
-              closeAiDrawer();
-            }
-            setDirty(true);
-            renderActiveSectionCard(sec, state.activeSectionIdx);
-            renderPreview();
+            const kindLabel = detail.is_bullet ? 'bullet point' : 'prose block';
+            openConfirmModal({
+              title: detail.is_bullet ? 'Delete Bullet Point?' : 'Delete Prose?',
+              message: `Are you sure you want to delete this ${kindLabel}?`,
+              previewText: detail.text || '',
+              confirmLabel: 'Delete',
+              onConfirm: () => {
+                details.splice(dIdx, 1);
+                if (state.aiOpen && state.aiTarget && state.aiTarget.secIdx === state.activeSectionIdx && state.aiTarget.itemIdx === itemIdx && state.aiTarget.detailIdx === dIdx) {
+                  closeAiDrawer();
+                }
+                setDirty(true);
+                renderActiveSectionCard(sec, state.activeSectionIdx);
+                renderPreview();
+              },
+            });
           }, 'btn-danger-hover')
         );
 
@@ -1855,11 +1936,111 @@
   // =========================================================
   // LIVE PAPER PREVIEW & NATIVE PDF PREVIEW
   // =========================================================
+  const STAT_BOLD_RE = new RegExp(
+    '(?<![A-Za-z0-9_\\\\/\\x00-])(?:' +
+      '[$£€]\\d+(?:[.,]\\d+)*(?:[KkMmBbTt]\\b|\\+)?|' +
+      '\\d+(?:[.,]\\d+)*%|' +
+      '\\d+(?:[.,]\\d+)*[xX]\\b|' +
+      '\\d+(?:[.,]\\d+)*(?:ms|us|ns|s|KB|MB|GB|TB|PB|Mbps|Gbps|rps|qps|fps)\\b\\+?|' +
+      '\\d+(?:[.,]\\d+)*(?:[KkMmBb]\\+?(?![A-Za-z0-9])|\\+)|' +
+      '\\d{1,3}(?:,\\d{3})+(?:\\+)?|' +
+      '\\d+(?:[.,]\\d+)?(?:-bed|-person|-member|-hour|-day|-week)?(?=\\s+(?:[a-z][A-Za-z-]*\\s+)?(?:hours?|hrs?|minutes?|mins?|seconds?|secs?|days?|weeks?|months?|years?|users?|clients?|customers?|accounts?|patients?|students?|engineers?|developers?|nurses?|staff|baristas?|teams?|apps?|applications?|services?|microservices?|endpoints?|servers?|containers?|orders?|transactions?|requests?|tickets?|records?|CVEs?|bugs?|vulnerabilities|issues?|percent|times|shifts?|beds?)\\b)|' +
+      '\\d+(?:[.,]\\d+)?(?:-(?:bed|person|member|hour|day|week))\\b' +
+    ')',
+    'g'
+  );
+  const BOLD_MD_RE = /\*\*(.+?)\*\*/g;
+  const ESCAPED_TOKEN_RE = /\\(\d+(?:[.,]\d+)?[A-Za-z%+-]*|[$£€]\d+(?:[.,]\d+)*[A-Za-z%+-]*|\*|\\)/g;
+
+  function clampPt(val, fallback = 6) {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.round(Math.max(0, Math.min(24, n)) * 100) / 100;
+  }
+
+  function normalizeFormattingConfig(rawFmt) {
+    const fmt = (rawFmt && typeof rawFmt === 'object') ? rawFmt : {};
+    const headerGap = clampPt(fmt.header_content_gap_pt, 6);
+    const sectionGap = clampPt(fmt.section_gap_pt, 6);
+    const entryGap = clampPt(fmt.entry_gap_pt, 6);
+    const overrides = {};
+    if (fmt.header_gap_overrides && typeof fmt.header_gap_overrides === 'object') {
+      Object.entries(fmt.header_gap_overrides).forEach(([k, v]) => {
+        const title = String(k || '').trim().toUpperCase();
+        if (title) overrides[title] = clampPt(v, headerGap);
+      });
+    } else if (fmt.standardize_skills_gap === false) {
+      overrides.SKILLS = 0;
+      overrides['TECHNICAL SKILLS'] = 0;
+    }
+    return {
+      header_content_gap_pt: headerGap,
+      section_gap_pt: sectionGap,
+      entry_gap_pt: entryGap,
+      header_gap_overrides: overrides,
+      auto_bold_stats: Boolean(fmt.auto_bold_stats),
+    };
+  }
+
+  function parseFormattedSegments(text, autoBoldStats) {
+    if (!text) return [];
+    const placeholders = {};
+    const protectedText = String(text).replace(ESCAPED_TOKEN_RE, (_, inner) => {
+      const idx = Object.keys(placeholders).length;
+      const tag = String(idx).split('').map((d) => String.fromCharCode(65 + Number(d))).join('');
+      const key = `\x00ESC${tag}\x00`;
+      placeholders[key] = inner;
+      return key;
+    });
+    const restore = (s) => {
+      let out = s;
+      Object.entries(placeholders).forEach(([k, v]) => {
+        out = out.split(k).join(v);
+      });
+      return out;
+    };
+
+    const mdMatches = [...protectedText.matchAll(BOLD_MD_RE)];
+    if (mdMatches.length > 0) {
+      const segs = [];
+      let pos = 0;
+      mdMatches.forEach((m) => {
+        if (m.index > pos) segs.push([restore(protectedText.slice(pos, m.index)), false]);
+        segs.push([restore(m[1]), true]);
+        pos = m.index + m[0].length;
+      });
+      if (pos < protectedText.length) segs.push([restore(protectedText.slice(pos)), false]);
+      return segs.filter(([t]) => Boolean(t));
+    }
+
+    if (!autoBoldStats) return [[restore(protectedText), false]];
+
+    const segs = [];
+    let pos = 0;
+    for (const m of protectedText.matchAll(STAT_BOLD_RE)) {
+      if (m.index > pos) segs.push([restore(protectedText.slice(pos, m.index)), false]);
+      segs.push([restore(m[0]), true]);
+      pos = m.index + m[0].length;
+    }
+    if (pos < protectedText.length) segs.push([restore(protectedText.slice(pos)), false]);
+    return segs.filter(([t]) => Boolean(t));
+  }
+
+  function renderFormattedTextHtml(text, autoBoldStats) {
+    return parseFormattedSegments(text, autoBoldStats)
+      .map(([seg, isBold]) => (isBold ? `<strong>${escapeHtml(seg)}</strong>` : escapeHtml(seg)))
+      .join('');
+  }
+
   function renderPreview() {
     if (!state.data) {
       el.resumePaper.innerHTML = '';
       return;
     }
+
+    const fmt = normalizeFormattingConfig(state.data.formatting);
+    el.resumePaper.style.setProperty('--paper-section-gap', `${fmt.section_gap_pt}pt`);
+    el.resumePaper.style.setProperty('--paper-entry-gap', `${fmt.entry_gap_pt}pt`);
 
     const d = state.data;
     const contactParts = [d.phone, d.email, d.portfolio, d.linkedin]
@@ -1872,13 +2053,16 @@
     `;
 
     (d.sections || []).forEach((sec) => {
-      html += `<div class="paper-section">`;
-      html += `<h2 class="paper-section-title">${escapeHtml((sec.title || '').toUpperCase())}</h2>`;
+      const secTitle = (sec.title || '').trim().toUpperCase();
+      const headerGapPt = Object.prototype.hasOwnProperty.call(fmt.header_gap_overrides, secTitle)
+        ? fmt.header_gap_overrides[secTitle]
+        : fmt.header_content_gap_pt;
+      html += `<div class="paper-section" style="--sec-header-gap: ${headerGapPt}pt;">`;
+      html += `<h2 class="paper-section-title">${escapeHtml(secTitle)}</h2>`;
 
       if (sec.is_skills) {
-        const addFirstGap = state.formatting?.standardize_skills_gap !== false;
         (sec.items || []).forEach((skill, skillIdx) => {
-          const firstClass = skillIdx === 0 && addFirstGap ? ' paper-skill-row-first' : '';
+          const firstClass = skillIdx === 0 ? ' paper-skill-row-first' : '';
           html += `<p class="paper-skill-row${firstClass}"><span class="paper-skill-cat">${escapeHtml(skill.category || '')}:</span> ${escapeHtml(skill.text || '')}</p>`;
         });
       } else {
@@ -1921,18 +2105,19 @@
           const details = item.details || [];
           let inBulletList = false;
           details.forEach((detail) => {
+            const renderedDetail = renderFormattedTextHtml(detail.text || '', fmt.auto_bold_stats);
             if (detail.is_bullet) {
               if (!inBulletList) {
                 html += `<ul class="paper-details-list">`;
                 inBulletList = true;
               }
-              html += `<li class="paper-detail-bullet">${escapeHtml(detail.text || '')}</li>`;
+              html += `<li class="paper-detail-bullet">${renderedDetail}</li>`;
             } else {
               if (inBulletList) {
                 html += `</ul>`;
                 inBulletList = false;
               }
-              html += `<p class="paper-detail-prose">${escapeHtml(detail.text || '')}</p>`;
+              html += `<p class="paper-detail-prose">${renderedDetail}</p>`;
             }
           });
           if (inBulletList) {
@@ -1947,6 +2132,53 @@
     });
 
     el.resumePaper.innerHTML = html;
+    updatePageBreakIndicators();
+  }
+
+  function updatePageBreakIndicators() {
+    if (!el.resumePaper) return;
+    el.resumePaper.querySelectorAll('.paper-page-break').forEach((n) => n.remove());
+
+    // Match Base_Template.docx US Letter dimensions (8.5 x 11 in, margins top 0.39in, bottom 0.30in)
+    const PX_PER_IN = 96;
+    const PAGE_HEIGHT_IN = 11;
+    const TOP_MARGIN_IN = 0.39;
+    const BOTTOM_MARGIN_IN = 0.30;
+    const PAGE_1_LIMIT_PX = (PAGE_HEIGHT_IN - BOTTOM_MARGIN_IN) * PX_PER_IN; // 1027.2px
+    const PRINTABLE_PX = (PAGE_HEIGHT_IN - TOP_MARGIN_IN - BOTTOM_MARGIN_IN) * PX_PER_IN; // 989.76px
+
+    const children = Array.from(el.resumePaper.children);
+    let contentBottom = 0;
+    if (children.length > 0) {
+      const lastEl = children[children.length - 1];
+      contentBottom = lastEl.offsetTop + lastEl.offsetHeight;
+    }
+
+    let pageCount = 1;
+    if (contentBottom > PAGE_1_LIMIT_PX + 2) {
+      pageCount = 1 + Math.ceil((contentBottom - PAGE_1_LIMIT_PX) / PRINTABLE_PX);
+    }
+    el.resumePaper.style.minHeight = `${pageCount * PAGE_HEIGHT_IN}in`;
+
+    for (let p = 1; p < pageCount; p += 1) {
+      const topPx = PAGE_1_LIMIT_PX + (p - 1) * PRINTABLE_PX;
+      const marker = document.createElement('div');
+      marker.className = 'paper-page-break';
+      marker.style.top = `${topPx}px`;
+      marker.innerHTML = `<span class="paper-page-break-label">Page ${p} / Page ${p + 1} Break</span>`;
+      el.resumePaper.appendChild(marker);
+    }
+
+    if (el.livePageBadge) {
+      el.livePageBadge.classList.remove('is-ok', 'is-overflow');
+      if (pageCount === 1) {
+        el.livePageBadge.textContent = '1 Page';
+        el.livePageBadge.classList.add('is-ok');
+      } else {
+        el.livePageBadge.textContent = `~${pageCount} Pages (Overflow)`;
+        el.livePageBadge.classList.add('is-overflow');
+      }
+    }
   }
 
   function setPreviewMode(mode) {
@@ -1958,8 +2190,13 @@
     el.pdfPreviewWrapper.hidden = isLive;
     el.btnRefreshPdf.hidden = isLive;
     el.zoomControls.hidden = !isLive;
+    if (el.livePageBadge) {
+      el.livePageBadge.hidden = !isLive;
+    }
     if (!isLive) {
       refreshNativePdfPreview();
+    } else {
+      updatePageBreakIndicators();
     }
   }
 
@@ -2073,16 +2310,12 @@
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
-      const fmt = settings.formatting || {};
       const provider = PROVIDER_DEFAULTS[ai.provider] ? ai.provider : 'OpenAI';
       const defaultModel = PROVIDER_DEFAULTS[provider].model;
       state.aiConfig = {
         provider,
         model: (ai.model || '').trim() || defaultModel,
         hasActiveKey: Boolean((keys[provider] || '').trim()),
-      };
-      state.formatting = {
-        standardize_skills_gap: fmt.standardize_skills_gap !== false,
       };
     } catch {
       // Leave existing config on transient failure
@@ -2590,7 +2823,13 @@
       delBtn.innerHTML = '<i data-lucide="trash-2"></i>';
       delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        openDeleteChatModal(chat.id, chat.title || 'New Chat');
+        const chatTitle = chat.title || 'New Chat';
+        openConfirmModal({
+          title: 'Delete AI Chat?',
+          message: `Are you sure you want to delete "${chatTitle}"? This permanently removes the saved conversation and cannot be undone.`,
+          confirmLabel: 'Delete Chat',
+          onConfirm: () => deleteFullAiChat(chat.id),
+        });
       });
 
       row.append(body, delBtn);
@@ -2690,14 +2929,6 @@
     renderFullAiSidebar();
   }
 
-  function openDeleteChatModal(chatId, chatTitle) {
-    state.deleteChatTargetId = chatId;
-    state.deleteChatTargetTitle = chatTitle || 'New Chat';
-    el.deleteChatTargetTitle.textContent = `"${state.deleteChatTargetTitle}"`;
-    openModal(el.modalDeleteChat);
-    el.btnConfirmDeleteChat.focus();
-  }
-
   async function deleteFullAiChat(chatId) {
     try {
       await fetchJson(`/api/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
@@ -2775,10 +3006,15 @@
     if (!msg || !msg.proposed_resume || typeof msg.proposed_resume !== 'object') return;
     state.lastAiUndoState = JSON.parse(JSON.stringify(state.data));
     const preservedHistory = state.data?._history;
+    const preservedFormatting = state.data?.formatting;
     state.data = JSON.parse(JSON.stringify(msg.proposed_resume));
     if (preservedHistory !== undefined) {
       state.data._history = preservedHistory;
     }
+    if (preservedFormatting && typeof preservedFormatting === 'object') {
+      state.data.formatting = normalizeFormattingConfig(preservedFormatting);
+    }
+    state.formatting = normalizeFormattingConfig(state.data.formatting);
     state.fullAiMessages.forEach((m, idx) => {
       if (m.proposed_resume && m.proposal_status === 'pending' && idx !== msgIdx) {
         m.proposal_status = 'dismissed';
@@ -2828,12 +3064,95 @@
     el.fullAiInput.focus();
   }
 
+  function refreshHeaderOverrideDatalist() {
+    if (!el.headerOverrideSuggestions) return;
+    const baseTitles = [
+      'PROFESSIONAL SUMMARY',
+      'EXPERIENCE',
+      'EDUCATION',
+      'PROJECTS',
+      'SKILLS',
+      'TECHNICAL SKILLS',
+    ];
+    const activeTitles = (state.data?.sections || [])
+      .map((s) => (s.title || '').trim().toUpperCase())
+      .filter(Boolean);
+    const merged = Array.from(new Set([...activeTitles, ...baseTitles]));
+    el.headerOverrideSuggestions.innerHTML = merged
+      .map((t) => `<option value="${escapeHtml(t)}"></option>`)
+      .join('');
+  }
+
+  function renderHeaderOverridesList(overridesObj) {
+    el.headerGapOverridesList.innerHTML = '';
+    const entries = Object.entries(overridesObj || {});
+    if (entries.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'override-empty';
+      empty.textContent = 'No per-header overrides set (all headers use the default gap above).';
+      el.headerGapOverridesList.appendChild(empty);
+      return;
+    }
+    entries.forEach(([title, gapVal]) => {
+      el.headerGapOverridesList.appendChild(createHeaderOverrideRow(title, gapVal));
+    });
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function createHeaderOverrideRow(title = '', gapPt = 6) {
+    const row = document.createElement('div');
+    row.className = 'override-row';
+
+    const titleInput = document.createElement('input');
+    titleInput.type = 'text';
+    titleInput.className = 'input-control override-title-input';
+    titleInput.setAttribute('list', 'headerOverrideSuggestions');
+    titleInput.placeholder = 'Header name (e.g. SKILLS)';
+    titleInput.value = title;
+
+    const gapWrap = document.createElement('div');
+    gapWrap.className = 'override-gap-unit';
+
+    const gapInput = document.createElement('input');
+    gapInput.type = 'number';
+    gapInput.className = 'input-control override-gap-input';
+    gapInput.min = '0';
+    gapInput.max = '24';
+    gapInput.step = '0.5';
+    gapInput.value = String(clampPt(gapPt, 6));
+
+    const unit = document.createElement('span');
+    unit.textContent = 'pt';
+    gapWrap.append(gapInput, unit);
+
+    const removeBtn = makeIconButton('x', 'Remove override', false, () => {
+      row.remove();
+      if (el.headerGapOverridesList.querySelectorAll('.override-row').length === 0) {
+        renderHeaderOverridesList({});
+      }
+    }, 'btn-danger-hover');
+
+    row.append(titleInput, gapWrap, removeBtn);
+    return row;
+  }
+
+  function collectHeaderOverrides() {
+    const result = {};
+    el.headerGapOverridesList.querySelectorAll('.override-row').forEach((row) => {
+      const title = (row.querySelector('.override-title-input')?.value || '').trim().toUpperCase();
+      const gap = row.querySelector('.override-gap-input')?.value;
+      if (title) {
+        result[title] = clampPt(gap, 6);
+      }
+    });
+    return result;
+  }
+
   async function openSettingsModal() {
     try {
       const { settings } = await fetchJson('/api/settings');
       const keys = settings.api_keys || {};
       const ai = settings.ai || {};
-      const fmt = settings.formatting || {};
       el.aiProviderSelect.value = ai.provider || 'OpenAI';
       el.aiModelInput.value = ai.model || (PROVIDER_DEFAULTS[el.aiProviderSelect.value]?.model || 'gpt-4o-mini');
       syncSettingsProviderFields(false);
@@ -2841,8 +3160,25 @@
       el.keyGemini.value = keys.Gemini || '';
       el.keyClaude.value = keys.Claude || '';
       el.keyOther.value = keys.Other || '';
-      el.settingStandardizeSkillsGap.checked = fmt.standardize_skills_gap !== false;
+
+      const hasOpenResume = state.view === 'wizard' && Boolean(state.data);
+      el.resumeFormattingSettingsGroup.hidden = !hasOpenResume;
+      el.resumeFormattingSettingsLockedNote.hidden = hasOpenResume;
+
+      if (hasOpenResume) {
+        const resumeTitle = (state.data.name || '').trim() || 'Current Resume';
+        el.resumeFormattingTargetLabel.textContent = `— ${resumeTitle}`;
+        const fmt = normalizeFormattingConfig(state.data.formatting);
+        el.settingHeaderContentGap.value = String(fmt.header_content_gap_pt);
+        el.settingSectionGap.value = String(fmt.section_gap_pt);
+        el.settingEntryGap.value = String(fmt.entry_gap_pt);
+        el.settingAutoBoldStats.checked = Boolean(fmt.auto_bold_stats);
+        refreshHeaderOverrideDatalist();
+        renderHeaderOverridesList(fmt.header_gap_overrides);
+      }
+
       openModal(el.modalSettings);
+      if (window.lucide) lucide.createIcons();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -2991,8 +3327,22 @@
         }
       }
       if (e.key === 'Escape') {
-        [el.modalSectionTitle, el.modalDeleteResume, el.modalDeleteChat, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
+        [el.modalSectionTitle, el.modalDeleteResume, el.modalConfirmAction, el.modalHistory, el.modalSettings, el.modalCreateMode].forEach(closeModal);
       }
+    });
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => {
+        if (state.view === 'wizard' && state.previewMode === 'live' && state.data) {
+          updatePageBreakIndicators();
+        }
+      });
+    }
+
+    el.btnConfirmAction.addEventListener('click', () => {
+      const fn = pendingConfirmFn;
+      closeModal(el.modalConfirmAction);
+      if (typeof fn === 'function') fn();
     });
 
     // Modal close buttons
@@ -3048,26 +3398,19 @@
       }
     });
 
-    el.btnConfirmDeleteChat.addEventListener('click', async () => {
-      if (!state.deleteChatTargetId) return;
-      const targetId = state.deleteChatTargetId;
-      el.btnConfirmDeleteChat.disabled = true;
-      try {
-        await deleteFullAiChat(targetId);
-        closeModal(el.modalDeleteChat);
-        state.deleteChatTargetId = null;
-        state.deleteChatTargetTitle = '';
-      } finally {
-        el.btnConfirmDeleteChat.disabled = false;
-      }
-    });
-
     // Settings Modal
     el.aiProviderSelect.addEventListener('change', () => syncSettingsProviderFields(true));
+    el.btnAddHeaderOverride.addEventListener('click', () => {
+      const emptyMsg = el.headerGapOverridesList.querySelector('.override-empty');
+      if (emptyMsg) emptyMsg.remove();
+      const row = createHeaderOverrideRow('', clampPt(el.settingHeaderContentGap.value, 6));
+      el.headerGapOverridesList.appendChild(row);
+      if (window.lucide) lucide.createIcons();
+      row.querySelector('.override-title-input')?.focus();
+    });
     el.formSettings.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        const standardizeSkillsGap = Boolean(el.settingStandardizeSkillsGap.checked);
         await fetchJson('/api/settings', {
           method: 'PUT',
           body: JSON.stringify({
@@ -3081,20 +3424,31 @@
               Claude: el.keyClaude.value,
               Other: el.keyOther.value,
             },
-            formatting: {
-              standardize_skills_gap: standardizeSkillsGap,
-            },
           }),
         });
-        state.formatting = { standardize_skills_gap: standardizeSkillsGap };
-        closeModal(el.modalSettings);
-        showToast('Settings saved.', 'success');
-        if (state.view === 'wizard' && state.data) {
-          renderLivePreview();
+
+        const hasOpenResume = state.view === 'wizard' && Boolean(state.data);
+        if (hasOpenResume) {
+          state.data.formatting = normalizeFormattingConfig({
+            header_content_gap_pt: clampPt(el.settingHeaderContentGap.value, 6),
+            section_gap_pt: clampPt(el.settingSectionGap.value, 6),
+            entry_gap_pt: clampPt(el.settingEntryGap.value, 6),
+            header_gap_overrides: collectHeaderOverrides(),
+            auto_bold_stats: Boolean(el.settingAutoBoldStats.checked),
+          });
+          renderPreview();
+          if (!state.isNewResume && state.activeResumeId) {
+            await saveCurrentResume({ saveMode: 'autosave', silent: true });
+          } else {
+            setDirty(true);
+          }
           if (state.previewMode === 'pdf') {
             refreshNativePdfPreview();
           }
         }
+
+        closeModal(el.modalSettings);
+        showToast(hasOpenResume ? 'AI & resume formatting settings saved.' : 'Global AI settings saved.', 'success');
         if (state.aiOpen || state.editorMode === 'ai') {
           await refreshAiSettingsStatus();
           if (state.aiOpen) renderAiQuickChips();
@@ -3170,6 +3524,461 @@
       el.tabEditor.classList.remove('active');
       el.previewPane.classList.remove('mobile-hidden');
       el.editorPane.classList.add('mobile-hidden');
+    });
+
+    // Interactive Tour Triggers & Controls
+    if (el.btnDirTour) el.btnDirTour.addEventListener('click', () => startTour(0));
+    if (el.btnWizTour) el.btnWizTour.addEventListener('click', () => startTour(3));
+    if (el.btnStartWelcomeTour) {
+      el.btnStartWelcomeTour.addEventListener('click', () => {
+        localStorage.setItem('rb_tour_completed', '1');
+        if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+        startTour(0);
+      });
+    }
+    if (el.btnDismissWelcomeTour) {
+      el.btnDismissWelcomeTour.addEventListener('click', () => {
+        localStorage.setItem('rb_tour_completed', '1');
+        if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+      });
+    }
+    if (el.btnTourClose) el.btnTourClose.addEventListener('click', endTour);
+    if (el.btnTourSkip) el.btnTourSkip.addEventListener('click', endTour);
+    if (el.btnTourPrev) el.btnTourPrev.addEventListener('click', () => goToTourStep(tourState.stepIdx - 1));
+    if (el.btnTourNext) {
+      el.btnTourNext.addEventListener('click', () => {
+        if (tourState.stepIdx >= TOUR_STEPS.length - 1) {
+          endTour();
+        } else {
+          goToTourStep(tourState.stepIdx + 1);
+        }
+      });
+    }
+    window.addEventListener('resize', () => {
+      if (tourState.active) positionCurrentTourStep();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!tourState.active) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        endTour();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (tourState.stepIdx >= TOUR_STEPS.length - 1) endTour();
+        else goToTourStep(tourState.stepIdx + 1);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (tourState.stepIdx > 0) goToTourStep(tourState.stepIdx - 1);
+      }
+    });
+  }
+
+  // =========================================================
+  // INTERACTIVE VIRTUAL TOUR
+  // =========================================================
+  const TOUR_DEMO_RESUME = {
+    name: 'Elena Vance',
+    phone: '(415) 555-0148',
+    email: 'elena.vance@example.com',
+    portfolio: 'github.com/elenavance',
+    linkedin: 'linkedin.com/in/elenavance',
+    sections: [
+      {
+        title: 'PROFESSIONAL SUMMARY',
+        is_skills: false,
+        items: [{
+          role: '', company: '', location: '', date: '', subtitle: '', subtitle_right: '',
+          details: [{ is_bullet: false, text: 'Cloud security and backend engineer with 6+ years building high-throughput APIs and automated DevSecOps pipelines.' }],
+        }],
+      },
+      {
+        title: 'EXPERIENCE',
+        is_skills: false,
+        items: [{
+          role: 'Senior Security Engineer',
+          company: 'Aegis Cloud Systems',
+          location: 'San Francisco, CA',
+          date: 'Mar 2023 - Present',
+          subtitle: '',
+          subtitle_right: '',
+          details: [
+            { is_bullet: true, text: 'Re-engineered payment queue in Go and RabbitMQ, reducing checkout latency by 60% (1.2s to 450ms) across 50K peak orders.' },
+            { is_bullet: true, text: 'Automated SAST/DAST scanning in GitLab CI/CD with SonarQube and Trivy, cutting remediation time by 35%.' },
+          ],
+        }],
+      },
+      {
+        title: 'TECHNICAL SKILLS',
+        is_skills: true,
+        items: [
+          { category: 'Languages', text: 'Go, Python, TypeScript, SQL' },
+          { category: 'Cloud & Security', text: 'AWS, Kubernetes, Docker, Trivy, SonarQube' },
+        ],
+      },
+    ],
+  };
+
+  const tourState = {
+    active: false,
+    stepIdx: 0,
+    origin: null,
+    demoLoaded: false,
+  };
+
+  function showTourDirectoryUiOnly() {
+    el.directoryView.hidden = false;
+    el.wizardView.hidden = true;
+    el.wizardTopContext.hidden = true;
+    el.wizardTopActions.hidden = true;
+    el.directoryTopActions.hidden = false;
+    closeModal(el.modalSettings);
+  }
+
+  async function ensureTourWorkspaceReady() {
+    closeModal(el.modalSettings);
+    if (state.view === 'wizard' && state.data) {
+      el.directoryView.hidden = true;
+      el.wizardView.hidden = false;
+      el.wizardTopContext.hidden = false;
+      el.wizardTopActions.hidden = false;
+      el.directoryTopActions.hidden = true;
+      return;
+    }
+    if (!tourState.demoLoaded) {
+      if (state.resumes && state.resumes.length > 0) {
+        try {
+          const rec = await fetchJson(`/api/resumes/${encodeURIComponent(state.resumes[0].id)}`);
+          state.data = rec.data;
+          state.activeResumeId = rec.id;
+          state.activeResumeSlug = rec.slug || 'resume';
+          state.isNewResume = false;
+          state.isDirty = false;
+        } catch {
+          state.data = JSON.parse(JSON.stringify(TOUR_DEMO_RESUME));
+          state.isNewResume = true;
+        }
+      } else {
+        state.data = JSON.parse(JSON.stringify(TOUR_DEMO_RESUME));
+        state.isNewResume = true;
+      }
+      tourState.demoLoaded = true;
+    }
+    state.activeSectionIdx = 0;
+    enterWizardView('manual');
+  }
+
+  const TOUR_STEPS = [
+    {
+      title: '1. Local Resume Directory',
+      body: `
+        <p>Every resume and version snapshot lives locally in SQLite (<code>resumes.db</code>) on your machine.</p>
+        <ul>
+          <li><strong>Search</strong> live by candidate name, email, or phone.</li>
+          <li><strong>Edit</strong>, <strong>Duplicate</strong>, or download <strong>DOCX / PDF / JSON</strong> directly from any row.</li>
+        </ul>
+      `,
+      selector: () => (el.directoryList && !el.directoryList.hidden ? '#directoryList' : '#directoryEmpty'),
+      prepare: async () => {
+        showTourDirectoryUiOnly();
+      },
+    },
+    {
+      title: '2. Creating & Importing Resumes',
+      body: `
+        <p>Use the top-right toolbar to get started quickly:</p>
+        <ul>
+          <li><strong>Create New Resume:</strong> Choose between the guided <strong>Manual Wizard</strong> or conversational <strong>AI Builder</strong>.</li>
+          <li><strong>Import JSON:</strong> Load any previously exported <code>.json</code> resume backup straight into your database.</li>
+        </ul>
+      `,
+      selector: () => '#directoryTopActions',
+      prepare: async () => {
+        showTourDirectoryUiOnly();
+      },
+    },
+    {
+      title: '3. Global Settings: AI Providers & Local Keys',
+      body: `
+        <p>Your AI provider, model, and API keys are <strong>global</strong> across the whole app (stored locally in <code>settings.json</code>).</p>
+        <ul>
+          <li>Pick <strong>OpenAI</strong> (e.g. <code>gpt-4o-mini</code>), <strong>Google Gemini</strong>, or <strong>Anthropic Claude</strong>, or leave blank if you only use manual editing.</li>
+          <li><em>Note:</em> Spacing and bolding settings are saved <strong>per resume</strong>—open any resume to customize those.</li>
+        </ul>
+      `,
+      selector: () => '#modalSettings .form-grid-2',
+      prepare: async () => {
+        showTourDirectoryUiOnly();
+        await openSettingsModal();
+        const mb = el.modalSettings.querySelector('.modal-body');
+        if (mb) mb.scrollTop = 0;
+      },
+    },
+    {
+      title: '4. Manual Wizard ↔ AI Builder Sync',
+      body: `
+        <p>Inside a resume workspace, switch tabs anytime between <strong>Manual Wizard</strong> and <strong>AI Builder</strong>.</p>
+        <p>Both edit the exact same live resume—any changes you make in one mode appear immediately in the other.</p>
+      `,
+      selector: () => '.editor-mode-bar',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(1);
+      },
+    },
+    {
+      title: '5. Per-Resume Spacing & Per-Header Overrides',
+      body: `
+        <p>When you open <strong>Settings</strong> inside a resume, you can tailor layout gaps <strong>specifically for this resume</strong> (saved in SQLite &amp; JSON exports):</p>
+        <ul>
+          <li><strong>Under Headers / Between Sections / Between Entries:</strong> Standardized to <code>6pt</code> by default so Summary, Experience, and Skills match.</li>
+          <li><strong>Per-Header Gap Overrides:</strong> Click <strong>Add Override</strong> to set a custom gap for one specific header (e.g. <code>SKILLS: 3pt</code>) without affecting your other resumes.</li>
+        </ul>
+      `,
+      selector: () => '#modalSettings .form-grid-3',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        if (el.modalSettings.hidden) await openSettingsModal();
+        el.settingHeaderContentGap?.scrollIntoView({ block: 'center' });
+      },
+    },
+    {
+      title: '6. Per-Resume Auto-Bold Statistics & Markdown',
+      body: `
+        <p>Enable or disable <strong>Auto-bold statistics</strong> independently for each resume:</p>
+        <ul>
+          <li><strong>Auto-bold statistics:</strong> Automatically bolds percentages, currency, multipliers, and scale counts (ignoring years &amp; tech versions).</li>
+          <li><strong>Manual Markdown:</strong> Wrap text in <code>**bold**</code> anytime—if a bullet has manual <code>**...**</code>, auto-bold skips the rest of that bullet. Prefix a stat with <code>\\</code> (e.g. <code>\\24-bed</code>) to ignore it.</li>
+        </ul>
+      `,
+      selector: () => '#settingAutoBoldStats',
+      selectorClosest: '.form-toggle-row',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        if (el.modalSettings.hidden) await openSettingsModal();
+        el.settingAutoBoldStats?.scrollIntoView({ block: 'center' });
+      },
+    },
+    {
+      title: '7. Sections & Layout Formats (Step 2)',
+      body: `
+        <p>In <strong>Step 2 (Sections)</strong>, add presets or custom sections, rename them, and reorder them up or down.</p>
+        <ul>
+          <li><strong>Standard Format:</strong> Used for Professional Summary, Experience, Education, and Projects.</li>
+          <li><strong>Key-Value Format:</strong> Two-column <code>Category: Items</code> rows ideal for Skills and Certifications.</li>
+        </ul>
+      `,
+      selector: () => '#stage2',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(2);
+      },
+    },
+    {
+      title: '8. Bullets, Prose, AI Assist & Safe Delete (Step 3)',
+      body: `
+        <p>In <strong>Step 3 (Content)</strong>, fill in entries or fine-tune individual lines:</p>
+        <ul>
+          <li><strong>Bullet vs. Prose:</strong> Toggle any detail row—leave Role/Company/Date blank + <strong>Prose</strong> for a clean Summary paragraph.</li>
+          <li><strong>Draft with AI / Assist:</strong> Get Google XYZ coaching and 1-line rewrites for any bullet.</li>
+          <li><strong>Safe Delete:</strong> Clicking <code>×</code> opens an <em>"Are you sure?"</em> confirmation dialog so you never lose a bullet by accident.</li>
+        </ul>
+      `,
+      selector: () => {
+        const container = document.getElementById('activeSectionContainer');
+        return container && container.children.length > 0 ? '#activeSectionContainer' : '#stage3';
+      },
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        const sections = state.data?.sections || [];
+        const expIdx = sections.findIndex((s) => !s.is_skills && (s.items || []).length > 0);
+        state.activeSectionIdx = expIdx >= 0 ? expIdx : 0;
+        goToWizardStep(3);
+      },
+    },
+    {
+      title: '9. Conversational AI Builder & Undo',
+      body: `
+        <p>Prefer chatting? Describe your background, target job, or edits in plain English and the AI populates your resume in real time.</p>
+        <ul>
+          <li>Saved conversations live in the <strong>Saved Chats</strong> sidebar.</li>
+          <li>Use <strong>Undo Last Edit</strong> anytime to revert the latest AI change in one click.</li>
+        </ul>
+      `,
+      selector: () => '#aiBuilderView',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('ai');
+      },
+    },
+    {
+      title: '10. Live Layout, Page Counter & PDF Render',
+      body: `
+        <p>The right pane gives you real-time visual feedback in Cambria/Caladea:</p>
+        <ul>
+          <li><strong>Page Badge &amp; Break Line:</strong> Tracks US Letter length (<code>1 Page</code> vs. <code>~2 Pages Overflow</code>) and draws a dashed page-break line if you spill onto Page 2.</li>
+          <li><strong>PDF Render:</strong> Click <strong>PDF Render</strong> to inspect the exact LibreOffice/Word paginated PDF before exporting.</li>
+        </ul>
+      `,
+      selector: () => '#previewPane .preview-toolbar',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+        setEditorMode('manual');
+        goToWizardStep(1);
+        setPreviewMode('live');
+      },
+    },
+    {
+      title: '11. Auto-Save, History & Exports',
+      body: `
+        <p>Your work is protected automatically as you type:</p>
+        <ul>
+          <li><strong>Save Snapshot (<code>Cmd+S</code> / <code>Ctrl+S</code>):</strong> Create named checkpoints anytime.</li>
+          <li><strong>History:</strong> Inspect, export, or restore any earlier snapshot without losing safety.</li>
+          <li><strong>DOCX / PDF / JSON:</strong> Export publication-ready Word and PDF files from <code>Base_Template.docx</code>, or replay this tour anytime via the compass icon.</li>
+        </ul>
+      `,
+      selector: () => '#wizardTopActions',
+      prepare: async () => {
+        await ensureTourWorkspaceReady();
+      },
+    },
+  ];
+
+  async function startTour(startIndex = 0) {
+    tourState.active = true;
+    tourState.demoLoaded = false;
+    tourState.origin = {
+      view: state.view,
+      wizardStep: state.wizardStep,
+      editorMode: state.editorMode,
+      previewMode: state.previewMode,
+      activeSectionIdx: state.activeSectionIdx,
+      settingsOpen: !el.modalSettings.hidden,
+    };
+    el.tourOverlay.hidden = false;
+    await goToTourStep(startIndex);
+  }
+
+  async function endTour() {
+    if (!tourState.active) return;
+    tourState.active = false;
+    el.tourOverlay.hidden = true;
+    closeModal(el.modalSettings);
+    localStorage.setItem('rb_tour_completed', '1');
+    if (el.tourWelcomeBanner) el.tourWelcomeBanner.hidden = true;
+
+    const orig = tourState.origin;
+    if (orig) {
+      if (orig.view === 'directory') {
+        if (tourState.demoLoaded) {
+          state.data = null;
+          state.activeResumeId = null;
+          state.isNewResume = false;
+          state.isDirty = false;
+        }
+        showTourDirectoryUiOnly();
+      } else {
+        el.directoryView.hidden = true;
+        el.wizardView.hidden = false;
+        el.wizardTopContext.hidden = false;
+        el.wizardTopActions.hidden = false;
+        el.directoryTopActions.hidden = true;
+        state.activeSectionIdx = orig.activeSectionIdx || 0;
+        setEditorMode(orig.editorMode || 'manual');
+        goToWizardStep(orig.wizardStep || 1);
+        setPreviewMode(orig.previewMode || 'live');
+      }
+      if (orig.settingsOpen) {
+        await openSettingsModal();
+      }
+    }
+    tourState.origin = null;
+    tourState.demoLoaded = false;
+  }
+
+  function positionCurrentTourStep() {
+    const step = TOUR_STEPS[tourState.stepIdx];
+    if (!step) return;
+    const rawSel = typeof step.selector === 'function' ? step.selector() : step.selector;
+    let targetEl = rawSel ? document.querySelector(rawSel) : null;
+    if (targetEl && step.selectorClosest) {
+      targetEl = targetEl.closest(step.selectorClosest) || targetEl;
+    }
+
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const popEl = el.tourPopover;
+    const spotEl = el.tourSpotlight;
+
+    if (!targetEl) {
+      spotEl.style.top = '50%';
+      spotEl.style.left = '50%';
+      spotEl.style.width = '0px';
+      spotEl.style.height = '0px';
+      popEl.style.top = `${Math.max(16, (vh - popEl.offsetHeight) / 2)}px`;
+      popEl.style.left = `${Math.max(16, (vw - popEl.offsetWidth) / 2)}px`;
+      return;
+    }
+
+    const rect = targetEl.getBoundingClientRect();
+    const pad = 6;
+    const sTop = Math.max(4, rect.top - pad);
+    const sLeft = Math.max(4, rect.left - pad);
+    const sWidth = Math.min(vw - sLeft - 4, rect.width + pad * 2);
+    const sHeight = Math.min(vh - sTop - 4, rect.height + pad * 2);
+
+    spotEl.style.top = `${sTop}px`;
+    spotEl.style.left = `${sLeft}px`;
+    spotEl.style.width = `${sWidth}px`;
+    spotEl.style.height = `${sHeight}px`;
+
+    const popW = popEl.offsetWidth || 380;
+    const popH = popEl.offsetHeight || 220;
+    const gap = 14;
+    let pTop = 16;
+    let pLeft = 16;
+
+    if (vh - rect.bottom >= popH + gap + 12) {
+      pTop = rect.bottom + gap;
+      pLeft = Math.min(vw - popW - 12, Math.max(12, rect.left));
+    } else if (rect.top >= popH + gap + 12) {
+      pTop = rect.top - popH - gap;
+      pLeft = Math.min(vw - popW - 12, Math.max(12, rect.left));
+    } else if (vw - rect.right >= popW + gap + 12) {
+      pTop = Math.min(vh - popH - 12, Math.max(12, rect.top));
+      pLeft = rect.right + gap;
+    } else if (rect.left >= popW + gap + 12) {
+      pTop = Math.min(vh - popH - 12, Math.max(12, rect.top));
+      pLeft = rect.left - popW - gap;
+    } else {
+      pTop = vh - popH - 16;
+      pLeft = vw - popW - 16;
+    }
+
+    popEl.style.top = `${Math.max(12, Math.min(vh - popH - 12, pTop))}px`;
+    popEl.style.left = `${Math.max(12, Math.min(vw - popW - 12, pLeft))}px`;
+  }
+
+  async function goToTourStep(idx) {
+    if (idx < 0 || idx >= TOUR_STEPS.length) return;
+    tourState.stepIdx = idx;
+    const step = TOUR_STEPS[idx];
+    if (typeof step.prepare === 'function') {
+      await step.prepare();
+    }
+    el.tourStepCounter.textContent = `Step ${idx + 1} of ${TOUR_STEPS.length}`;
+    el.tourStepTitle.textContent = step.title;
+    el.tourStepBody.innerHTML = step.body;
+    el.btnTourPrev.disabled = idx === 0;
+    el.btnTourNext.textContent = idx === TOUR_STEPS.length - 1 ? 'Finish' : 'Next';
+    if (window.lucide) lucide.createIcons();
+
+    requestAnimationFrame(() => {
+      positionCurrentTourStep();
+      setTimeout(positionCurrentTourStep, 60);
     });
   }
 

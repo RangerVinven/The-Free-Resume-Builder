@@ -17,6 +17,42 @@ LEGACY_RESUMES_DIR = (
     Path(os.environ["LEGACY_RESUMES_DIR"]) if os.environ.get("LEGACY_RESUMES_DIR") else Path("resumes")
 )
 AUTO_CHECKPOINT_INTERVAL_SECONDS = 180
+DEFAULT_GAP_PT = 6.0
+
+
+def _clamp_pt(value: Any, default: float = DEFAULT_GAP_PT) -> float:
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    return round(max(0.0, min(24.0, num)), 2)
+
+
+def normalize_formatting_settings(raw_fmt: dict | None) -> dict:
+    """Normalize per-resume formatting settings with backward compatibility."""
+    fmt = raw_fmt if isinstance(raw_fmt, dict) else {}
+    header_gap = _clamp_pt(fmt.get("header_content_gap_pt"), DEFAULT_GAP_PT)
+    section_gap = _clamp_pt(fmt.get("section_gap_pt"), DEFAULT_GAP_PT)
+    entry_gap = _clamp_pt(fmt.get("entry_gap_pt"), DEFAULT_GAP_PT)
+
+    overrides: dict[str, float] = {}
+    raw_overrides = fmt.get("header_gap_overrides")
+    if isinstance(raw_overrides, dict):
+        for k, v in raw_overrides.items():
+            title = str(k or "").strip().upper()
+            if title:
+                overrides[title] = _clamp_pt(v, header_gap)
+    elif fmt.get("standardize_skills_gap") is False:
+        overrides["SKILLS"] = 0.0
+        overrides["TECHNICAL SKILLS"] = 0.0
+
+    return {
+        "header_content_gap_pt": header_gap,
+        "section_gap_pt": section_gap,
+        "entry_gap_pt": entry_gap,
+        "header_gap_overrides": overrides,
+        "auto_bold_stats": bool(fmt.get("auto_bold_stats", False)),
+    }
 
 
 def _now_str() -> str:
@@ -57,6 +93,7 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
             if not title:
                 continue
             is_skills = bool(sec.get("is_skills", False))
+            is_summary_title = any(kw in title for kw in ("SUMMARY", "PROFILE", "OBJECTIVE"))
             raw_items = sec.get("items") if isinstance(sec.get("items"), list) else []
             clean_items = []
             if is_skills:
@@ -69,20 +106,55 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                         clean_items.append({"category": cat, "text": txt})
             else:
                 for it in raw_items:
-                    if not isinstance(it, dict):
+                    if isinstance(it, str) or not isinstance(it, dict):
+                        txt = _clean_str(it)
+                        if txt:
+                            starts_with_bullet = bool(re.match(r"^[\u2022\u25e6\u2023\u25aa\u25cf\*\-]\s*", txt))
+                            clean_text = re.sub(r"^[\u2022\u25e6\u2023\u25aa\u25cf\*\-]\s*", "", txt)
+                            is_bullet = starts_with_bullet if starts_with_bullet else not is_summary_title
+                            clean_items.append({
+                                "role": "",
+                                "company": "",
+                                "location": "",
+                                "date": "",
+                                "subtitle": "",
+                                "subtitle_right": "",
+                                "details": [{"is_bullet": is_bullet, "text": clean_text}],
+                            })
                         continue
+
                     raw_details = it.get("details") if isinstance(it.get("details"), list) else []
                     clean_details = []
                     for d in raw_details:
                         if isinstance(d, dict):
                             d_txt = _clean_str(d.get("text"))
                             if d_txt:
+                                d_is_bullet = d.get("is_bullet")
+                                if d_is_bullet is None:
+                                    d_is_bullet = not is_summary_title
+                                else:
+                                    d_is_bullet = bool(d_is_bullet)
                                 clean_details.append({
-                                    "is_bullet": bool(d.get("is_bullet", True)),
+                                    "is_bullet": d_is_bullet,
                                     "text": d_txt,
                                 })
                         elif isinstance(d, str) and d.strip():
-                            clean_details.append({"is_bullet": True, "text": d.strip()})
+                            clean_details.append({
+                                "is_bullet": not is_summary_title,
+                                "text": d.strip(),
+                            })
+
+                    if not clean_details:
+                        fallback_text = _clean_str(
+                            it.get("text")
+                            or it.get("summary")
+                            or it.get("content")
+                            or it.get("description")
+                            or it.get("prose")
+                        )
+                        if fallback_text:
+                            is_b = bool(it.get("is_bullet", not is_summary_title))
+                            clean_details.append({"is_bullet": is_b, "text": fallback_text})
 
                     item_obj = {
                         "role": _clean_str(it.get("role")),
@@ -93,6 +165,19 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                         "subtitle_right": _clean_str(it.get("subtitle_right")),
                         "details": clean_details,
                     }
+
+                    if is_summary_title and item_obj["role"]:
+                        role_norm = item_obj["role"].strip().upper()
+                        if role_norm in (
+                            "PROFESSIONAL SUMMARY",
+                            "SUMMARY",
+                            "PROFILE",
+                            "CAREER OBJECTIVE",
+                            "OBJECTIVE",
+                            title,
+                        ):
+                            item_obj["role"] = ""
+
                     has_header = any(
                         item_obj[k]
                         for k in ("role", "company", "location", "date", "subtitle", "subtitle_right")
@@ -100,11 +185,73 @@ def normalize_resume_schema(raw_data: dict | None, existing_data: dict | None = 
                     if has_header or clean_details:
                         clean_items.append(item_obj)
 
+                if not clean_items:
+                    sec_fallback = _clean_str(
+                        sec.get("summary")
+                        or sec.get("text")
+                        or sec.get("content")
+                        or sec.get("description")
+                        or sec.get("prose")
+                    )
+                    if sec_fallback:
+                        clean_items.append({
+                            "role": "",
+                            "company": "",
+                            "location": "",
+                            "date": "",
+                            "subtitle": "",
+                            "subtitle_right": "",
+                            "details": [{"is_bullet": False, "text": sec_fallback}],
+                        })
+
             normalized["sections"].append({
                 "title": title,
                 "is_skills": is_skills,
                 "items": clean_items,
             })
+
+    top_summary = _clean_str(
+        src.get("summary") or src.get("professional_summary") or src.get("profile")
+    )
+    if top_summary:
+        summary_sec = None
+        for s in normalized["sections"]:
+            if any(kw in s["title"] for kw in ("SUMMARY", "PROFILE", "OBJECTIVE")):
+                summary_sec = s
+                break
+        if summary_sec is not None:
+            if not summary_sec["items"]:
+                summary_sec["items"].append({
+                    "role": "",
+                    "company": "",
+                    "location": "",
+                    "date": "",
+                    "subtitle": "",
+                    "subtitle_right": "",
+                    "details": [{"is_bullet": False, "text": top_summary}],
+                })
+        else:
+            normalized["sections"].insert(0, {
+                "title": "PROFESSIONAL SUMMARY",
+                "is_skills": False,
+                "items": [{
+                    "role": "",
+                    "company": "",
+                    "location": "",
+                    "date": "",
+                    "subtitle": "",
+                    "subtitle_right": "",
+                    "details": [{"is_bullet": False, "text": top_summary}],
+                }],
+            })
+
+    if isinstance(src.get("formatting"), dict):
+        raw_fmt = src.get("formatting")
+    elif isinstance(existing_data, dict) and isinstance(existing_data.get("formatting"), dict):
+        raw_fmt = existing_data.get("formatting")
+    else:
+        raw_fmt = None
+    normalized["formatting"] = normalize_formatting_settings(raw_fmt)
 
     if isinstance(existing_data, dict) and "_history" in existing_data:
         normalized["_history"] = existing_data["_history"]
@@ -142,6 +289,7 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 portfolio TEXT NOT NULL DEFAULT '',
                 linkedin TEXT NOT NULL DEFAULT '',
                 sections_json TEXT NOT NULL DEFAULT '[]',
+                formatting_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -176,6 +324,9 @@ def init_db(db_path: Path | None = None, legacy_dir: Path | None = None) -> None
                 ON ai_chats(resume_id, updated_at);
             """
         )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(resumes)").fetchall()}
+        if "formatting_json" not in cols:
+            conn.execute("ALTER TABLE resumes ADD COLUMN formatting_json TEXT NOT NULL DEFAULT '{}' ")
 
     migrate_legacy_json_resumes(db_path=db_path, legacy_dir=legacy_dir)
 
@@ -214,11 +365,12 @@ def migrate_legacy_json_resumes(
             mtime_str = datetime.fromtimestamp(json_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
             slug = make_slug(clean_current["name"] or json_file.stem)
             sections_str = json.dumps(clean_current["sections"])
+            formatting_str = json.dumps(clean_current["formatting"])
 
             cur = conn.execute(
                 """
-                INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, formatting_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     slug,
@@ -228,6 +380,7 @@ def migrate_legacy_json_resumes(
                     clean_current["portfolio"],
                     clean_current["linkedin"],
                     sections_str,
+                    formatting_str,
                     mtime_str,
                     mtime_str,
                 ),
@@ -281,6 +434,10 @@ def migrate_legacy_json_resumes(
 
 def _row_to_resume_dict(row: sqlite3.Row, versions: list[sqlite3.Row]) -> dict:
     sections = json.loads(row["sections_json"] or "[]")
+    try:
+        raw_fmt = json.loads(row["formatting_json"] or "{}") if "formatting_json" in row.keys() else {}
+    except Exception:
+        raw_fmt = {}
     history = []
     for v in versions:
         history.append({
@@ -297,6 +454,7 @@ def _row_to_resume_dict(row: sqlite3.Row, versions: list[sqlite3.Row]) -> dict:
         "portfolio": row["portfolio"],
         "linkedin": row["linkedin"],
         "sections": sections,
+        "formatting": normalize_formatting_settings(raw_fmt),
         "_history": history,
     }
 
@@ -358,13 +516,14 @@ def create_resume_db(
     now = _now_str()
     slug = make_slug(clean["name"])
     sections_str = json.dumps(clean["sections"])
+    formatting_str = json.dumps(clean["formatting"])
     snapshot_str = json.dumps(clean)
 
     with get_connection(db_path) as conn:
         cur = conn.execute(
             """
-            INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO resumes (slug, name, phone, email, portfolio, linkedin, sections_json, formatting_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -374,6 +533,7 @@ def create_resume_db(
                 clean["portfolio"],
                 clean["linkedin"],
                 sections_str,
+                formatting_str,
                 now,
                 now,
             ),
@@ -478,13 +638,20 @@ def update_resume_db(
         # Preserve existing non-empty name if transient blank input occurs mid-edit
         effective_name = clean["name"] or row["name"]
         clean["name"] = effective_name
+        if not isinstance(payload, dict) or not isinstance(payload.get("formatting"), dict):
+            try:
+                existing_fmt = json.loads(row["formatting_json"] or "{}") if "formatting_json" in row.keys() else {}
+            except Exception:
+                existing_fmt = {}
+            clean["formatting"] = normalize_formatting_settings(existing_fmt)
         slug = make_slug(effective_name)
         sections_str = json.dumps(clean["sections"])
+        formatting_str = json.dumps(clean["formatting"])
 
         conn.execute(
             """
             UPDATE resumes
-            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, updated_at = ?
+            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, formatting_json = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -495,6 +662,7 @@ def update_resume_db(
                 clean["portfolio"],
                 clean["linkedin"],
                 sections_str,
+                formatting_str,
                 now,
                 resume_id,
             ),
@@ -561,6 +729,10 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
             return None
 
         # Archive current live state before reverting if it differs from latest saved snapshot
+        try:
+            live_fmt = json.loads(res_row["formatting_json"] or "{}") if "formatting_json" in res_row.keys() else {}
+        except Exception:
+            live_fmt = {}
         current_live = _strip_history({
             "name": res_row["name"],
             "phone": res_row["phone"],
@@ -568,6 +740,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
             "portfolio": res_row["portfolio"],
             "linkedin": res_row["linkedin"],
             "sections": json.loads(res_row["sections_json"] or "[]"),
+            "formatting": live_fmt,
         })
         last_ver = conn.execute(
             "SELECT version_num, snapshot_json FROM resume_versions WHERE resume_id = ? ORDER BY version_num DESC, id DESC LIMIT 1",
@@ -589,7 +762,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
         conn.execute(
             """
             UPDATE resumes
-            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, updated_at = ?
+            SET slug = ?, name = ?, phone = ?, email = ?, portfolio = ?, linkedin = ?, sections_json = ?, formatting_json = ?, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -600,6 +773,7 @@ def revert_version_db(resume_id: int, version_id: int, db_path: Path | None = No
                 restored["portfolio"],
                 restored["linkedin"],
                 json.dumps(restored["sections"]),
+                json.dumps(restored["formatting"]),
                 now,
                 resume_id,
             ),
